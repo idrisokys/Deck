@@ -110,6 +110,34 @@ enum ActionButton: String, CaseIterable, Identifiable {
     }
 }
 
+/// Orta sütundaki Resim / Belge / Arşiv süzgeçleri
+enum FileFilter: String, CaseIterable, Identifiable {
+    case image, document, archive
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .image: "Resim"
+        case .document: "Belge"
+        case .archive: "Arşiv"
+        }
+    }
+
+    var extensions: Set<String> {
+        switch self {
+        case .image:
+            ["jpg", "jpeg", "png", "gif", "heic", "heif", "webp", "tif", "tiff", "bmp", "svg",
+             "ico", "avif", "psd", "raw", "dng", "cr2", "cr3", "nef", "arw"]
+        case .document:
+            ["pdf", "doc", "docx", "txt", "rtf", "odt", "pages", "md", "epub",
+             "xls", "xlsx", "csv", "numbers", "ods",
+             "ppt", "pptx", "key", "odp"]
+        case .archive:
+            ["zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz", "zst", "cab", "dmg", "iso", "pkg"]
+        }
+    }
+}
+
 // MARK: - Dosya modeli
 
 struct FileItem: Identifiable, Hashable {
@@ -232,6 +260,11 @@ final class PaneModel {
     var selection: Set<URL> = []
     var backStack: [URL] = []
 
+    /// Resim / Belge / Arşiv süzgeci (klasörler her zaman görünür, böylece gezinilebilir)
+    var typeFilter: FileFilter? { didSet { pruneSelection() } }
+    /// Arama metni: bulunduğu klasörde ada göre anında süzer
+    var query = "" { didSet { pruneSelection() } }
+
     @ObservationIgnored weak var app: AppModel?
     @ObservationIgnored private var anchor: URL?
     @ObservationIgnored private var lastNavigation = Date.distantPast
@@ -242,6 +275,31 @@ final class PaneModel {
     }
 
     var selectedItems: [FileItem] { items.filter { selection.contains($0.url) } }
+
+    var isFiltering: Bool {
+        typeFilter != nil || !query.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    /// Süzgeç ve aramaya göre görünen öğeler
+    var visibleItems: [FileItem] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if typeFilter == nil && q.isEmpty { return items }
+        return items.filter { item in
+            if let f = typeFilter, !item.isDirectory || item.isPackage {
+                if !f.extensions.contains(item.url.pathExtension.lowercased()) { return false }
+            }
+            if !q.isEmpty {
+                return item.name.range(of: q, options: [.caseInsensitive, .diacriticInsensitive], locale: .current) != nil
+            }
+            return true
+        }
+    }
+
+    private func pruneSelection() {
+        let present = Set(visibleItems.map(\.url))
+        let kept = selection.intersection(present)
+        if kept != selection { selection = kept }
+    }
 
     /// Klasöre girdikten hemen sonra gelen ikinci tıkı (çift tık) yok sayar.
     var recentlyNavigated: Bool { Date().timeIntervalSince(lastNavigation) < 0.35 }
@@ -305,9 +363,10 @@ final class PaneModel {
             toggleSelect(item)
         } else if flags.contains(.shift),
                   let a = anchor,
-                  let i = items.firstIndex(where: { $0.url == a }),
-                  let j = items.firstIndex(where: { $0.url == item.url }) {
-            selection = Set(items[min(i, j)...max(i, j)].map(\.url))
+                  case let list = visibleItems,
+                  let i = list.firstIndex(where: { $0.url == a }),
+                  let j = list.firstIndex(where: { $0.url == item.url }) {
+            selection = Set(list[min(i, j)...max(i, j)].map(\.url))
         } else if item.isEnterable {
             navigate(to: item.url)               // tek tıkla klasöre gir
         } else {
@@ -1122,15 +1181,15 @@ struct FileList: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(Array(pane.items.enumerated()), id: \.element.id) { i, item in
+                ForEach(Array(pane.visibleItems.enumerated()), id: \.element.id) { i, item in
                     FileRow(pane: pane, side: side, item: item, striped: i % 2 == 1)
                 }
             }
         }
         .id(pane.currentURL)
         .overlay {
-            if pane.items.isEmpty {
-                Text("Bu klasör boş")
+            if pane.visibleItems.isEmpty {
+                Text(pane.isFiltering && !pane.items.isEmpty ? "Sonuç bulunamadı" : "Bu klasör boş")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
             }
@@ -1367,6 +1426,166 @@ struct ActionCell: View {
     }
 }
 
+// MARK: - Süzgeç çubuğu (Resim / Belge / Arşiv + arama)
+
+/// Resim: çerçeve, güneş ve dağ
+struct ImageGlyph: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(LinearGradient(colors: [Color(red: 0.55, green: 0.85, blue: 0.5), Color(red: 0.1, green: 0.6, blue: 0.4)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+            Circle().fill(Color.yellow).frame(width: 7, height: 7).offset(x: 8, y: -7)
+            MountainShape()
+                .fill(Color.white.opacity(0.92))
+                .frame(width: 34, height: 15)
+                .offset(y: 6)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
+        .frame(width: 34, height: 28)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
+struct MountainShape: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.width * 0.30, y: r.minY + 2))
+        p.addLine(to: CGPoint(x: r.width * 0.55, y: r.height * 0.6))
+        p.addLine(to: CGPoint(x: r.width * 0.72, y: r.height * 0.28))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// Belge: kıvrık köşeli sayfa ve metin çizgileri
+struct DocumentGlyph: View {
+    var body: some View {
+        ZStack {
+            DocShape()
+                .fill(LinearGradient(colors: [Color(red: 0.45, green: 0.88, blue: 1.0), Color(red: 0.15, green: 0.5, blue: 1.0)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+            VStack(alignment: .leading, spacing: 3.5) {
+                Capsule().fill(.white.opacity(0.9)).frame(width: 16, height: 2.5)
+                Capsule().fill(.white.opacity(0.9)).frame(width: 16, height: 2.5)
+                Capsule().fill(.white.opacity(0.9)).frame(width: 10, height: 2.5)
+            }
+            .offset(y: 5)
+        }
+        .frame(width: 26, height: 32)
+    }
+}
+
+struct DocShape: Shape {
+    func path(in r: CGRect) -> Path {
+        let c: CGFloat = 9
+        var p = Path()
+        p.move(to: CGPoint(x: r.minX + 4, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX - c, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY + c))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY - 4))
+        p.addQuadCurve(to: CGPoint(x: r.maxX - 4, y: r.maxY), control: CGPoint(x: r.maxX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX + 4, y: r.maxY))
+        p.addQuadCurve(to: CGPoint(x: r.minX, y: r.maxY - 4), control: CGPoint(x: r.minX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.minY + 4))
+        p.addQuadCurve(to: CGPoint(x: r.minX + 4, y: r.minY), control: CGPoint(x: r.minX, y: r.minY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// Arşiv: kapaklı kutu ve tutamak
+struct ArchiveGlyph: View {
+    var body: some View {
+        let g = LinearGradient(colors: [Color(red: 1.0, green: 0.78, blue: 0.3), Color(red: 1.0, green: 0.5, blue: 0.1)],
+                               startPoint: .top, endPoint: .bottom)
+        ZStack {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)        // kapak
+                .fill(g).frame(width: 34, height: 9).offset(y: -9.5)
+            RoundedRectangle(cornerRadius: 3, style: .continuous)        // gövde
+                .fill(g).frame(width: 30, height: 20).offset(y: 5)
+            Capsule().fill(Color(red: 0.35, green: 0.18, blue: 0.02))    // tutamak
+                .frame(width: 11, height: 4).offset(y: 1)
+        }
+        .frame(width: 34, height: 32)
+    }
+}
+
+struct FilterBar: View {
+    @Environment(AppModel.self) var app
+    @FocusState private var searchFocused: Bool
+
+    var body: some View {
+        let pane = app.active
+        VStack(spacing: 0) {
+            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+            HStack(spacing: 0) {
+                ForEach(FileFilter.allCases) { f in
+                    let on = pane.typeFilter == f
+                    Button {
+                        pane.typeFilter = on ? nil : f
+                    } label: {
+                        VStack(spacing: 6) {
+                            Group {
+                                switch f {
+                                case .image: ImageGlyph()
+                                case .document: DocumentGlyph()
+                                case .archive: ArchiveGlyph()
+                                }
+                            }
+                            .frame(height: 34)
+                            Text(f.title)
+                                .font(.system(size: 13, weight: on ? .semibold : .regular))
+                                .foregroundStyle(.white.opacity(on ? 1 : 0.92))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 78)
+                        .background(on ? Theme.accent.opacity(0.28) : Color.clear)
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(Theme.accent).frame(height: on ? 2 : 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(CellButtonStyle())
+                    .overlay(Rectangle().stroke(Color.white.opacity(0.05), lineWidth: 0.5))
+                }
+            }
+            // Arama kutusu: sütun genişliğine tam oturur
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.5))
+                TextField("Ara", text: Binding(
+                    get: { app.active.query },
+                    set: { app.active.query = $0 }
+                ))
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .focused($searchFocused)
+                .onExitCommand { app.active.query = ""; searchFocused = false }
+                if !pane.query.isEmpty {
+                    Button { app.active.query = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
+            .overlay(RoundedRectangle(cornerRadius: 8)
+                .stroke(searchFocused ? Theme.accent.opacity(0.8) : Color.white.opacity(0.1), lineWidth: 1))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 8)
+        }
+        .background(Theme.bar.opacity(0.8))
+    }
+}
+
 struct CenterColumn: View {
     @Environment(AppModel.self) var app
     @State private var showSort = false
@@ -1376,10 +1595,13 @@ struct CenterColumn: View {
     }
 
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
-                ForEach(visible) { b in cell(b) }
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 0), GridItem(.flexible(), spacing: 0)], spacing: 0) {
+                    ForEach(visible) { b in cell(b) }
+                }
             }
+            FilterBar()
         }
         .background(Theme.bar.opacity(0.55))
     }
