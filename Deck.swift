@@ -857,11 +857,12 @@ struct ContentView: View {
 
 struct TopBar: View {
     @Environment(AppModel.self) var app
+    static let height: CGFloat = 62
 
     var body: some View {
         GeometryReader { geo in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 14) {
+                HStack(spacing: 0) {
                     ForEach(app.bookmarks, id: \.path) { url in
                         BookmarkChip(url: url)
                     }
@@ -869,13 +870,17 @@ struct TopBar: View {
                         Text("Bir klasör seçip ortadaki “Yer imleri” düğmesine basarak buraya ekleyin.")
                             .font(.system(size: 14))
                             .foregroundStyle(.white.opacity(0.35))
+                            .frame(maxHeight: .infinity)
                     }
                 }
-                .padding(.horizontal, 12)
-                .frame(minWidth: geo.size.width)
+                .padding(.horizontal, 5)
+                // İçerik çubuğun tüm yüksekliğini kaplar; simgeler başlık çubuğu ile
+                // alttaki siyah alan arasında dikey olarak ortalanır.
+                .frame(minWidth: geo.size.width, minHeight: TopBar.height, maxHeight: TopBar.height)
             }
+            .frame(height: TopBar.height)
         }
-        .frame(height: 62)
+        .frame(height: TopBar.height)
     }
 }
 
@@ -885,24 +890,35 @@ struct BookmarkChip: View {
 
     var body: some View {
         let isCurrent = app.active.currentURL.normPath == url.normPath
-        HStack(spacing: 10) {
-            Image(systemName: Places.symbol(for: url))
-                .font(.system(size: 22))
-                .foregroundStyle(Theme.accent)
-            Text(Places.title(for: url))
-                .font(.system(size: 16))
-                .foregroundStyle(.white.opacity(0.9))
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 12).fill(isCurrent ? Color.white.opacity(0.12) : Color.white.opacity(0.001)))
-        .contentShape(RoundedRectangle(cornerRadius: 12))
-        .onTapGesture {
+        Button {
             // Hangi panel etkinse (en son tıklanan), klasör o panelde açılır.
             app.active.navigate(to: url)
             app.reloadAll()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: Places.symbol(for: url))
+                    .font(.system(size: 22))
+                    .foregroundStyle(Theme.accent)
+                Text(Places.title(for: url))
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 14)
+            // Görünen vurgu: çubuğun içinde ortalı, yuvarlak köşeli kutu
+            .frame(maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(isCurrent ? Color.white.opacity(0.12) : Color.clear)
+                    .padding(.vertical, 8)
+            )
+            // Tıklanabilir alan: görünen kutudan taşar, çubuğun tüm yüksekliğini ve
+            // iki yandaki boşluğun yarısını kapsar (fare ucu nereye gelirse gelsin çalışır).
+            .padding(.horizontal, 7)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .frame(height: TopBar.height)
         .contextMenu {
             Button("Yer imlerinden kaldır") { app.removeBookmark(url) }
         }
