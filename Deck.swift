@@ -887,6 +887,7 @@ struct BookmarkChip: View {
     var body: some View {
         let isCurrent = app.active.currentURL.normPath == url.normPath
         Button {
+            // Hangi panel etkinse (en son tıklanan), klasör o panelde açılır.
             app.active.navigate(to: url)
         } label: {
             HStack(spacing: 10) {
@@ -929,7 +930,51 @@ struct PaneView: View {
                 .stroke(app.activeSide == side ? Theme.accent.opacity(0.55) : Color.white.opacity(0.06), lineWidth: 1)
                 .allowsHitTesting(false)
         )
-        .simultaneousGesture(TapGesture().onEnded { app.activeSide = side })
+        // Panelin herhangi bir yerine (liste, başlık, boş alan) tıklanınca bu panel etkin olur.
+        .background(ClickTracker { app.activeSide = side })
+    }
+}
+
+/// Fare tıklamasını (sol/sağ) yakalar; tıklama bu görünümün alanı içindeyse `onClick` çağrılır.
+/// Olay, düğme eylemlerinden önce işlendiği için üstteki yer imi düğmeleri doğru paneli kullanır.
+struct ClickTracker: NSViewRepresentable {
+    let onClick: () -> Void
+
+    func makeNSView(context: Context) -> TrackerView {
+        let v = TrackerView()
+        v.onClick = onClick
+        return v
+    }
+
+    func updateNSView(_ nsView: TrackerView, context: Context) {
+        nsView.onClick = onClick
+    }
+
+    final class TrackerView: NSView {
+        var onClick: (() -> Void)?
+        private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                MainActor.assumeIsolated { self?.handle(event) }
+                return event
+            }
+        }
+
+        private func handle(_ event: NSEvent) {
+            guard event.window === window else { return }
+            let p = convert(event.locationInWindow, from: nil)
+            if bounds.contains(p) { onClick?() }
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
     }
 }
 
@@ -1012,6 +1057,11 @@ struct BreadcrumbBar: View {
         .padding(.horizontal, 12)
         .frame(height: 46)
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bar))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(app.activeSide == side ? Theme.accent.opacity(0.85) : Color.clear, lineWidth: 1.5)
+                .allowsHitTesting(false)
+        )
         .padding(8)
     }
 }
@@ -1166,18 +1216,119 @@ struct CellButtonStyle: ButtonStyle {
     }
 }
 
+// MARK: - Özel simgeler
+
+/// Sıralama: kısalan çubuklar + kırmızı aşağı ok
+struct SortGlyph: View {
+    private let widths: [CGFloat] = [26, 20, 14, 8]
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 7) {
+            VStack(alignment: .leading, spacing: 4.5) {
+                ForEach(0..<widths.count, id: \.self) { i in
+                    Capsule()
+                        .fill(LinearGradient(colors: [.white, Color(white: 0.74)], startPoint: .top, endPoint: .bottom))
+                        .frame(width: widths[i], height: 5.5)
+                }
+            }
+            SortArrow()
+                .stroke(
+                    LinearGradient(colors: [Color(red: 1.0, green: 0.45, blue: 0.35), Theme.accent],
+                                   startPoint: .top, endPoint: .bottom),
+                    style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round)
+                )
+                .frame(width: 16, height: 33)
+        }
+    }
+}
+
+struct SortArrow: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.midX, y: rect.minY + 2))
+        p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY - 3))
+        p.move(to: CGPoint(x: rect.minX + 2, y: rect.maxY - 11))
+        p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY - 3))
+        p.addLine(to: CGPoint(x: rect.maxX - 2, y: rect.maxY - 11))
+        return p
+    }
+}
+
+/// Yeniden adlandır: mavi yuvarlatılmış kare, çizgi üzerinde yazan kalem
+struct RenameGlyph: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(LinearGradient(colors: [Color(red: 0.25, green: 0.62, blue: 1.0), Color(red: 0.08, green: 0.32, blue: 0.85)],
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(width: 38, height: 38)
+            Capsule()
+                .fill(.white.opacity(0.9))
+                .frame(width: 15, height: 3)
+                .offset(x: -3, y: 12)
+            PencilGlyph()
+                .rotationEffect(.degrees(40))
+                .offset(x: 5, y: 0)
+        }
+    }
+}
+
+struct PencilGlyph: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2)                         // silgi
+                .fill(Color(red: 1.0, green: 0.62, blue: 0.58))
+                .frame(width: 9, height: 5)
+                .offset(y: -13)
+            Rectangle()                                               // gövde
+                .fill(.white)
+                .frame(width: 9, height: 15)
+                .offset(y: -3.5)
+            DownTriangle()                                            // ahşap uç
+                .fill(Color(red: 1.0, green: 0.86, blue: 0.62))
+                .frame(width: 9, height: 7)
+                .offset(y: 7.5)
+            DownTriangle()                                            // kurşun
+                .fill(Color(white: 0.2))
+                .frame(width: 4.5, height: 3.5)
+                .offset(y: 9.25)
+        }
+    }
+}
+
+struct DownTriangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
 struct ActionCell: View {
+    let kind: ActionButton
     let title: String
     let symbol: String
     let color: Color
 
     var body: some View {
         VStack(spacing: 6) {
-            Image(systemName: symbol)
-                .font(.system(size: 30))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(color)
-                .frame(height: 38)
+            Group {
+                switch kind {
+                case .sort:
+                    SortGlyph()
+                case .rename:
+                    RenameGlyph()
+                default:
+                    Image(systemName: symbol)
+                        .font(.system(size: 30))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(color)
+                }
+            }
+            .frame(height: 38)
             Text(title)
                 .font(.system(size: 13))
                 .multilineTextAlignment(.center)
@@ -1231,13 +1382,13 @@ struct CenterColumn: View {
                 }
                 .pickerStyle(.inline)
             } label: {
-                ActionCell(title: d.title, symbol: d.symbol, color: d.color)
+                ActionCell(kind: b, title: d.title, symbol: d.symbol, color: d.color)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
         } else {
             Button { perform(b) } label: {
-                ActionCell(title: d.title, symbol: d.symbol, color: d.color)
+                ActionCell(kind: b, title: d.title, symbol: d.symbol, color: d.color)
             }
             .buttonStyle(CellButtonStyle())
         }
