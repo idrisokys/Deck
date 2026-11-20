@@ -885,24 +885,24 @@ struct BookmarkChip: View {
 
     var body: some View {
         let isCurrent = app.active.currentURL.normPath == url.normPath
-        Button {
+        HStack(spacing: 10) {
+            Image(systemName: Places.symbol(for: url))
+                .font(.system(size: 22))
+                .foregroundStyle(Theme.accent)
+            Text(Places.title(for: url))
+                .font(.system(size: 16))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 12).fill(isCurrent ? Color.white.opacity(0.12) : Color.white.opacity(0.001)))
+        .contentShape(RoundedRectangle(cornerRadius: 12))
+        .onTapGesture {
             // Hangi panel etkinse (en son tıklanan), klasör o panelde açılır.
             app.active.navigate(to: url)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: Places.symbol(for: url))
-                    .font(.system(size: 22))
-                    .foregroundStyle(Theme.accent)
-                Text(Places.title(for: url))
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 12).fill(isCurrent ? Color.white.opacity(0.12) : .clear))
+            app.reloadAll()
         }
-        .buttonStyle(.plain)
         .contextMenu {
             Button("Yer imlerinden kaldır") { app.removeBookmark(url) }
         }
@@ -1353,6 +1353,7 @@ struct ActionCell: View {
 
 struct CenterColumn: View {
     @Environment(AppModel.self) var app
+    @State private var showSort = false
 
     private var visible: [ActionButton] {
         ActionButton.allCases.filter { $0 == .customize || !app.hiddenButtons.contains($0.rawValue) }
@@ -1380,22 +1381,51 @@ struct CenterColumn: View {
     private func cell(_ b: ActionButton) -> some View {
         let d = display(b)
         if b == .sort {
-            Menu {
-                Picker("Sıralama ölçütü", selection: Binding(get: { app.sortKey }, set: { app.setSort($0) })) {
-                    ForEach(SortKey.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.inline)
-                Divider()
-                Picker("Yön", selection: Binding(get: { app.ascending }, set: { app.setAscending($0) })) {
-                    Text("Artan").tag(true)
-                    Text("Azalan (en yeni üstte)").tag(false)
-                }
-                .pickerStyle(.inline)
-            } label: {
+            Button { showSort.toggle() } label: {
                 ActionCell(kind: b, title: d.title, symbol: d.symbol, color: d.color)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
+            .buttonStyle(CellButtonStyle())
+            .popover(isPresented: $showSort, arrowEdge: .trailing) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Sıralama ölçütü").font(.headline)
+                    ForEach(SortKey.allCases) { k in
+                        Button {
+                            app.setSort(k)
+                        } label: {
+                            HStack {
+                                Image(systemName: app.sortKey == k ? "checkmark" : "").frame(width: 16)
+                                Text(k.title)
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Divider()
+                    Button {
+                        app.setAscending(true)
+                    } label: {
+                        HStack {
+                            Image(systemName: app.ascending ? "checkmark" : "").frame(width: 16)
+                            Text("Artan"); Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Button {
+                        app.setAscending(false)
+                    } label: {
+                        HStack {
+                            Image(systemName: app.ascending ? "" : "checkmark").frame(width: 16)
+                            Text("Azalan (en yeni üstte)"); Spacer()
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(16)
+                .frame(width: 230)
+            }
         } else {
             Button { perform(b) } label: {
                 ActionCell(kind: b, title: d.title, symbol: d.symbol, color: d.color)
