@@ -686,6 +686,11 @@ struct GalleryView: View {
                 btn("play.rectangle.on.rectangle", play) { play.toggle(); NSApp.keyWindow?.toggleFullScreen(nil) }
                 Divider().frame(height: 30)
                 btn("trash") { del() }
+                if !files.isEmpty {
+                    ShareLink(item: files[i]) {
+                        Image(systemName: "square.and.arrow.up").font(.title2).frame(width: 44, height: 40)
+                    }.buttonStyle(.plain).foregroundColor(.white).help("Paylaş")
+                }
                 btn("folder") { open() }
             }.padding(.top, 8)
 
@@ -720,6 +725,8 @@ struct GalleryView: View {
         .onReceive(tick) { _ in if play { go(1) } }
         .onKeyPress(.leftArrow) { go(-1); return .handled }
         .onKeyPress(.rightArrow) { go(1); return .handled }
+        .onKeyPress(.upArrow) { rot(90); return .handled }      // yukarı: sola döndür
+        .onKeyPress(.downArrow) { rot(-90); return .handled }   // aşağı: sağa döndür
         .onKeyPress(keys: [.delete, .deleteForward]) { _ in del(); return .handled }
         .onKeyPress(.return) { if crop { saveCrop(); return .handled }; return .ignored }
         .onKeyPress(.escape) { if crop { crop = false; return .handled }; return .ignored }
@@ -2073,6 +2080,34 @@ struct AppCommands: Commands {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    private var coldLaunch = true
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Açılışta gelen "Birlikte Aç" isteği bu süre içinde işlenir
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.coldLaunch = false }
+    }
+
+    private var mainWindow: NSWindow? {
+        NSApp.windows.first { $0 !== Gallery.win && $0.title == "Deck" }
+    }
+
+    /// Finder'da "Birlikte Aç" ile ya da varsayılan uygulama olarak gelen resimleri
+    /// ayrı bir Galeri penceresinde açar. Uygulama bu istekle açıldıysa ana pencere gizli kalır.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let u = urls.first(where: { Gallery.isImage($0) }) ?? urls.first else { return }
+        Gallery.open(u)
+        if coldLaunch {
+            mainWindow?.orderOut(nil)
+            DispatchQueue.main.async { self.mainWindow?.orderOut(nil) }
+        }
+    }
+
+    /// Dock simgesine tıklanınca gizli ana pencere geri gelir.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let w = mainWindow, !w.isVisible { w.makeKeyAndOrderFront(nil); return false }
+        return true
+    }
 }
 
 // MARK: - Uygulama
