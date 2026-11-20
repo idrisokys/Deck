@@ -426,24 +426,18 @@ final class AppModel {
         let home = FileManager.default.homeDirectoryForCurrentUser
         left = PaneModel(url: home)
         right = PaneModel(url: home.appendingPathComponent("Downloads"))
+        // Üst bar artık boş başlar; eski varsayılan yer imleri bir kez temizlenir.
+        if !UserDefaults.standard.bool(forKey: "bookmarksClearedV2") {
+            UserDefaults.standard.removeObject(forKey: "bookmarks")
+            UserDefaults.standard.set(true, forKey: "bookmarksClearedV2")
+        }
         let saved = UserDefaults.standard.stringArray(forKey: "bookmarks")
-        bookmarks = saved?.map { URL(fileURLWithPath: $0) } ?? AppModel.defaultBookmarks()
+        bookmarks = saved?.map { URL(fileURLWithPath: $0) } ?? []
         hiddenButtons = Set(UserDefaults.standard.stringArray(forKey: "hiddenButtons") ?? [])
         left.app = self
         right.app = self
         left.start()
         right.start()
-    }
-
-    static func defaultBookmarks() -> [URL] {
-        let h = FileManager.default.homeDirectoryForCurrentUser
-        return [
-            h,
-            h.appendingPathComponent("Desktop"),
-            h.appendingPathComponent("Documents"),
-            h.appendingPathComponent("Downloads"),
-            URL(fileURLWithPath: "/Applications")
-        ]
     }
 
     var active: PaneModel { activeSide == .left ? left : right }
@@ -537,7 +531,7 @@ final class AppModel {
     }
 
     func resetBookmarks() {
-        bookmarks = AppModel.defaultBookmarks()
+        bookmarks = []
         saveBookmarks()
     }
 
@@ -870,6 +864,11 @@ struct TopBar: View {
                 HStack(spacing: 14) {
                     ForEach(app.bookmarks, id: \.path) { url in
                         BookmarkChip(url: url)
+                    }
+                    if app.bookmarks.isEmpty {
+                        Text("Bir klasör seçip ortadaki “Yer imleri” düğmesine basarak buraya ekleyin.")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.white.opacity(0.35))
                     }
                 }
                 .padding(.horizontal, 12)
@@ -1218,27 +1217,28 @@ struct CellButtonStyle: ButtonStyle {
 
 // MARK: - Özel simgeler
 
-/// Sıralama: kısalan çubuklar + kırmızı aşağı ok
+private let glyphBlue = LinearGradient(
+    colors: [Color(red: 0.45, green: 0.88, blue: 1.0), Color(red: 0.12, green: 0.45, blue: 1.0)],
+    startPoint: .topLeading, endPoint: .bottomTrailing)
+
+/// Sıralama: üç yuvarlak mavi çubuk + sağda mavi aşağı ok
 struct SortGlyph: View {
-    private let widths: [CGFloat] = [26, 20, 14, 8]
+    private let widths: [CGFloat] = [24, 22, 26]
 
     var body: some View {
-        HStack(alignment: .center, spacing: 7) {
-            VStack(alignment: .leading, spacing: 4.5) {
+        HStack(alignment: .center, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
                 ForEach(0..<widths.count, id: \.self) { i in
                     Capsule()
-                        .fill(LinearGradient(colors: [.white, Color(white: 0.74)], startPoint: .top, endPoint: .bottom))
+                        .fill(glyphBlue)
                         .frame(width: widths[i], height: 5.5)
                 }
             }
             SortArrow()
-                .stroke(
-                    LinearGradient(colors: [Color(red: 1.0, green: 0.45, blue: 0.35), Theme.accent],
-                                   startPoint: .top, endPoint: .bottom),
-                    style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round)
-                )
-                .frame(width: 16, height: 33)
+                .stroke(glyphBlue, style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
+                .frame(width: 16, height: 30)
         }
+        .shadow(color: Color(red: 0.2, green: 0.6, blue: 1.0).opacity(0.45), radius: 3)
     }
 }
 
@@ -1247,51 +1247,61 @@ struct SortArrow: Shape {
         var p = Path()
         p.move(to: CGPoint(x: rect.midX, y: rect.minY + 2))
         p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY - 3))
-        p.move(to: CGPoint(x: rect.minX + 2, y: rect.maxY - 11))
+        p.move(to: CGPoint(x: rect.minX + 1.5, y: rect.maxY - 10.5))
         p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY - 3))
-        p.addLine(to: CGPoint(x: rect.maxX - 2, y: rect.maxY - 11))
+        p.addLine(to: CGPoint(x: rect.maxX - 1.5, y: rect.maxY - 10.5))
         return p
     }
 }
 
-/// Yeniden adlandır: mavi yuvarlatılmış kare, çizgi üzerinde yazan kalem
+/// Yeniden adlandır: iki metin çizgisi, alt çizgi ve büyük mavi kalem
 struct RenameGlyph: View {
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(LinearGradient(colors: [Color(red: 0.25, green: 0.62, blue: 1.0), Color(red: 0.08, green: 0.32, blue: 0.85)],
-                                     startPoint: .top, endPoint: .bottom))
-                .frame(width: 38, height: 38)
+            Capsule().fill(glyphBlue).frame(width: 21, height: 5)
+                .offset(x: -11, y: -9)
+            Capsule().fill(glyphBlue).frame(width: 15, height: 5)
+                .offset(x: -14, y: -1)
             Capsule()
-                .fill(.white.opacity(0.9))
-                .frame(width: 15, height: 3)
-                .offset(x: -3, y: 12)
+                .fill(LinearGradient(colors: [Color(red: 0.45, green: 0.88, blue: 1.0), Color(red: 0.15, green: 0.5, blue: 1.0)],
+                                     startPoint: .leading, endPoint: .trailing))
+                .frame(width: 17, height: 3)
+                .offset(x: -12, y: 15)
             PencilGlyph()
-                .rotationEffect(.degrees(40))
-                .offset(x: 5, y: 0)
+                .rotationEffect(.degrees(45))
+                .offset(x: 6, y: -1)
         }
+        .frame(width: 46, height: 38)
+        .shadow(color: Color(red: 0.2, green: 0.6, blue: 1.0).opacity(0.45), radius: 3)
     }
 }
 
 struct PencilGlyph: View {
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 2)                         // silgi
-                .fill(Color(red: 1.0, green: 0.62, blue: 0.58))
-                .frame(width: 9, height: 5)
-                .offset(y: -13)
-            Rectangle()                                               // gövde
-                .fill(.white)
-                .frame(width: 9, height: 15)
-                .offset(y: -3.5)
-            DownTriangle()                                            // ahşap uç
-                .fill(Color(red: 1.0, green: 0.86, blue: 0.62))
-                .frame(width: 9, height: 7)
-                .offset(y: 7.5)
-            DownTriangle()                                            // kurşun
-                .fill(Color(white: 0.2))
-                .frame(width: 4.5, height: 3.5)
-                .offset(y: 9.25)
+            RoundedRectangle(cornerRadius: 3, style: .continuous)      // silgi başlığı
+                .fill(LinearGradient(colors: [Color(red: 0.6, green: 0.92, blue: 1.0), Color(red: 0.25, green: 0.6, blue: 1.0)],
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(width: 11, height: 7)
+                .offset(y: -14)
+            Rectangle()                                                // ayırıcı bant
+                .fill(Color(red: 0.03, green: 0.07, blue: 0.16))
+                .frame(width: 11, height: 1.6)
+                .offset(y: -10.2)
+            HStack(spacing: 0) {                                       // gövde: açık / koyu yarı
+                Rectangle().fill(Color(red: 0.55, green: 0.9, blue: 1.0))
+                Rectangle().fill(Color(red: 0.12, green: 0.42, blue: 0.95))
+            }
+            .frame(width: 11, height: 16)
+            .offset(y: -1.5)
+            DownTriangle()                                             // uç
+                .fill(Color(red: 0.8, green: 0.95, blue: 1.0))
+                .frame(width: 11, height: 9)
+                .offset(y: 11)
+            DownTriangle()                                             // kurşun
+                .fill(Color(red: 0.03, green: 0.07, blue: 0.16))
+                .frame(width: 4.5, height: 4)
+                .offset(y: 13.5)
         }
     }
 }
@@ -1437,7 +1447,7 @@ struct CustomizeSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
-                Button("Yer imlerini varsayılana döndür") { app.resetBookmarks() }
+                Button("Yer imlerini temizle") { app.resetBookmarks() }
                 Spacer()
                 Button("Bitti") { dismiss() }.keyboardShortcut(.defaultAction)
             }

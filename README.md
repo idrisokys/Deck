@@ -81,5 +81,5 @@ chmod +x Deck-build.sh
 - **ZIP** dosyasına çift tıklayınca, aynı yerde ZIP'in adını taşıyan klasöre çıkarılır.
 - **Kopyala** ve **Taşı** etkin panelden diğer panele çalışır.
 - Varsayılan sıralama: oluşturma tarihi, en yeni en üstte.
-- **Yer imleri** düğmesi o anki klasörü üst bara ekler; klasör barda zaten varsa kaldırır.
+- Üst bar boş başlar. **Yer imleri** düğmesi seçili klasörü (seçili yoksa açık klasörü) üst bara ekler; barda zaten varsa kaldırır. Bardaki klasöre tıklayınca, en son tıkladığınız (etkin) panelde doğrudan açılır.
 - Kısayollar: ⇧⌘N yeni klasör, ⌘⌫ sil, ⌘R yenile, ⌘[ geri, ⌘↑ üst klasör, ⌥⌘C kopyala, ⌥⌘M taşı.
