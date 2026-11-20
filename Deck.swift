@@ -401,6 +401,17 @@ final class PaneModel {
         selectMode = true
     }
 
+    /// Herhangi bir tıklama çoklu seçim modunu bitirir (seçili öğeler kalır)
+    func endSelectMode() {
+        dragBase = nil
+        selectMode = false
+    }
+
+    /// Fare bırakıldığında sürükle-seç yarım kaldıysa bitir
+    func finishDragIfNeeded() {
+        if dragBase != nil { endDragSelect() }
+    }
+
     func endDragSelect() {
         dragBase = nil
         suppressTapUntil = Date().addingTimeInterval(0.3)
@@ -490,6 +501,13 @@ enum Gallery {
 
     static func isImage(_ u: URL) -> Bool { exts.contains(u.pathExtension.lowercased()) }
 
+    /// Resmi piksel boyutunda yükler (kırpma ve kaydetmede çözünürlük kaybolmasın)
+    static func load(_ u: URL) -> NSImage? {
+        guard let m = NSImage(contentsOf: u) else { return nil }
+        if let r = m.representations.first, r.pixelsWide > 0 { m.size = NSSize(width: r.pixelsWide, height: r.pixelsHigh) }
+        return m
+    }
+
     static func siblings(of u: URL) -> [URL] {
         ((try? FileManager.default.contentsOfDirectory(at: u.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? [])
             .filter { isImage($0) }
@@ -519,21 +537,26 @@ enum Gallery {
     }
 }
 
+struct CropMode { var l = false, r = false, t = false, b = false, mv = false }
+
 struct GalleryView: View {
+    static let defCn = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
     @State var files: [URL]
     @State var i: Int
     @State var img: NSImage?
     @State var crop = false
     @State var play = false
-    @State var a: CGPoint?
-    @State var b: CGPoint?
+    @State var cn = GalleryView.defCn      // kırpma karesi (resme göre 0...1, sol üst başlangıçlı)
+    @State var d0 = GalleryView.defCn
+    @State var dm: CropMode?
+    @FocusState var foc: Bool
     let tick = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
 
     init(start: URL) {
         let fs = Gallery.siblings(of: start)
         _files = State(initialValue: fs)
         _i = State(initialValue: fs.firstIndex(of: start) ?? 0)
-        _img = State(initialValue: NSImage(contentsOf: start))
+        _img = State(initialValue: Gallery.load(start))
     }
 
     func btn(_ s: String, _ on: Bool = false, _ f: @escaping () -> Void) -> some View {
@@ -545,13 +568,14 @@ struct GalleryView: View {
 
     func go(_ d: Int) {
         guard !files.isEmpty else { return }
-        i = (i + d + files.count) % files.count; img = NSImage(contentsOf: files[i])
+        crop = false; cn = Self.defCn
+        i = (i + d + files.count) % files.count; img = Gallery.load(files[i])
     }
 
     func open() {
         let p = NSOpenPanel(); p.allowedContentTypes = [.image]
         guard p.runModal() == .OK, let u = p.url else { return }
-        files = Gallery.siblings(of: u); i = files.firstIndex(of: u) ?? 0; img = NSImage(contentsOf: u)
+        crop = false; files = Gallery.siblings(of: u); i = files.firstIndex(of: u) ?? 0; img = Gallery.load(u)
     }
 
     func rot(_ d: CGFloat) {
@@ -564,23 +588,87 @@ struct GalleryView: View {
         img = Gallery.xform(m, s) { $0.translateX(by: h ? s.width : 0, yBy: h ? 0 : s.height); $0.scaleX(by: h ? -1 : 1, yBy: h ? 1 : -1) }
     }
 
-    func doCrop(_ v: CGSize) {
-        defer { a = nil; b = nil; crop = false }
-        guard crop, let a, let b, let m = img else { return }
-        let s = m.size, k = min(v.width / s.width, v.height / s.height)
-        let ox = (v.width - s.width * k) / 2, oy = (v.height - s.height * k) / 2
-        let r = CGRect(x: (min(a.x, b.x) - ox) / k, y: s.height - (max(a.y, b.y) - oy) / k,
-                       width: abs(a.x - b.x) / k, height: abs(a.y - b.y) / k)
-            .intersection(CGRect(origin: .zero, size: s))
-        guard r.width > 4, r.height > 4 else { return }
-        img = NSImage(size: r.size, flipped: false) { _ in m.draw(at: .zero, from: r, operation: .copy, fraction: 1); return true }
-    }
-
     func del() {
         guard !files.isEmpty else { return }
+        crop = false
         try? FileManager.default.trashItem(at: files[i], resultingItemURL: nil)
         files.remove(at: i)
-        if files.isEmpty { img = nil; i = 0 } else { i = min(i, files.count - 1); img = NSImage(contentsOf: files[i]) }
+        if files.isEmpty { img = nil; i = 0 } else { i = min(i, files.count - 1); img = Gallery.load(files[i]) }
+    }
+
+    /// Seçili alanı "ad kopya.uzantı" olarak aynı klasöre kaydeder
+    func saveCrop() {
+        guard crop, !files.isEmpty, let m = img,
+              let cg = m.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        let W = CGFloat(cg.width), H = CGFloat(cg.height)
+        guard let part = cg.cropping(to: CGRect(x: (cn.minX * W).rounded(), y: (cn.minY * H).rounded(),
+                                                width: (cn.width * W).rounded(), height: (cn.height * H).rounded())) else { return }
+        let src = files[i]
+        let types: [String: NSBitmapImageRep.FileType] = ["png": .png, "jpg": .jpeg, "jpeg": .jpeg, "tiff": .tiff, "bmp": .bmp, "gif": .gif]
+        var ext = src.pathExtension.lowercased()
+        if types[ext] == nil { ext = "png" }          // heic/webp → png
+        guard let data = NSBitmapImageRep(cgImage: part).representation(using: types[ext]!, properties: [.compressionFactor: 0.95]) else { return }
+        let base = src.deletingPathExtension().lastPathComponent, dir = src.deletingLastPathComponent()
+        var dest = dir.appendingPathComponent("\(base) kopya.\(ext)"); var n = 2
+        while FileManager.default.fileExists(atPath: dest.path) { dest = dir.appendingPathComponent("\(base) kopya \(n).\(ext)"); n += 1 }
+        guard (try? data.write(to: dest)) != nil else { return }
+        files = Gallery.siblings(of: src); i = files.firstIndex(of: src) ?? 0
+        crop = false; cn = Self.defCn
+    }
+
+    // Resmin ekranda kapladığı alan
+    func disp(_ sz: CGSize) -> CGRect {
+        guard let m = img, m.size.width > 0, m.size.height > 0 else { return .zero }
+        let k = min(sz.width / m.size.width, sz.height / m.size.height)
+        let w = m.size.width * k, h = m.size.height * k
+        return CGRect(x: (sz.width - w) / 2, y: (sz.height - h) / 2, width: w, height: h)
+    }
+
+    func cropRect(_ d: CGRect) -> CGRect {
+        CGRect(x: d.minX + cn.minX * d.width, y: d.minY + cn.minY * d.height, width: cn.width * d.width, height: cn.height * d.height)
+    }
+
+    // Köşe/kenardan tutup boyutlandır, içinden tutup taşı
+    func dragCrop(_ v: DragGesture.Value, _ d: CGRect) {
+        guard crop, d.width > 1 else { return }
+        let c = cropRect(d)
+        if dm == nil {
+            let t: CGFloat = 16, p = v.startLocation
+            guard c.insetBy(dx: -t, dy: -t).contains(p) else { return }
+            var m = CropMode()
+            m.l = abs(p.x - c.minX) < t; m.r = abs(p.x - c.maxX) < t
+            m.t = abs(p.y - c.minY) < t; m.b = abs(p.y - c.maxY) < t
+            m.mv = !(m.l || m.r || m.t || m.b)
+            dm = m; d0 = cn
+        }
+        guard let m = dm else { return }
+        let dx = v.translation.width / d.width, dy = v.translation.height / d.height
+        var x0 = d0.minX, x1 = d0.maxX, y0 = d0.minY, y1 = d0.maxY
+        if m.mv {
+            x0 = min(max(d0.minX + dx, 0), 1 - d0.width); y0 = min(max(d0.minY + dy, 0), 1 - d0.height)
+            x1 = x0 + d0.width; y1 = y0 + d0.height
+        } else {
+            if m.l { x0 += dx }; if m.r { x1 += dx }; if m.t { y0 += dy }; if m.b { y1 += dy }
+            x0 = min(max(x0, 0), x1 - 0.03); x1 = max(min(x1, 1), x0 + 0.03)
+            y0 = min(max(y0, 0), y1 - 0.03); y1 = max(min(y1, 1), y0 + 0.03)
+        }
+        cn = CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
+    }
+
+    func cropOverlay(_ sz: CGSize, _ c: CGRect) -> some View {
+        let pts = [CGPoint(x: c.minX, y: c.minY), CGPoint(x: c.midX, y: c.minY), CGPoint(x: c.maxX, y: c.minY),
+                   CGPoint(x: c.minX, y: c.midY), CGPoint(x: c.maxX, y: c.midY),
+                   CGPoint(x: c.minX, y: c.maxY), CGPoint(x: c.midX, y: c.maxY), CGPoint(x: c.maxX, y: c.maxY)]
+        return ZStack(alignment: .topLeading) {
+            Path { $0.addRect(CGRect(origin: .zero, size: sz)); $0.addRect(c) }
+                .fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
+            Rectangle().stroke(Color.white, lineWidth: 1.5).frame(width: c.width, height: c.height).position(x: c.midX, y: c.midY)
+            ForEach(pts.indices, id: \.self) { Rectangle().fill(Color.white).frame(width: 10, height: 10).position(pts[$0]) }
+            Text("Enter: kopya olarak kaydet  •  Esc: iptal")
+                .font(.caption).foregroundColor(.white).padding(6)
+                .background(Color.black.opacity(0.6)).cornerRadius(6)
+                .frame(maxWidth: .infinity, alignment: .top).padding(.top, 6)
+        }.allowsHitTesting(false)
     }
 
     var body: some View {
@@ -593,7 +681,7 @@ struct GalleryView: View {
                 btn("rotate.right") { rot(-90) }
                 btn("flip.horizontal") { flip(true) }
                 btn("arrow.up.and.down.righttriangle.up.righttriangle.down") { flip(false) }
-                btn("crop", crop) { crop.toggle() }
+                btn("crop", crop) { crop.toggle(); cn = Self.defCn }
                 btn("arrow.up.left.and.arrow.down.right") { NSApp.keyWindow?.toggleFullScreen(nil) }
                 btn("play.rectangle.on.rectangle", play) { play.toggle(); NSApp.keyWindow?.toggleFullScreen(nil) }
                 Divider().frame(height: 30)
@@ -602,26 +690,23 @@ struct GalleryView: View {
             }.padding(.top, 8)
 
             GeometryReader { g in
+                let d = disp(g.size)
                 ZStack(alignment: .topLeading) {
                     if let m = img {
                         Image(nsImage: m).resizable().scaledToFit().frame(width: g.size.width, height: g.size.height)
                     }
-                    if crop, let a, let b {
-                        Rectangle().stroke(Color.yellow, lineWidth: 2)
-                            .frame(width: abs(a.x - b.x), height: abs(a.y - b.y))
-                            .offset(x: min(a.x, b.x), y: min(a.y, b.y))
-                    }
+                    if crop { cropOverlay(g.size, cropRect(d)) }
                 }
                 .contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 5)
-                    .onChanged { if crop { a = a ?? $0.startLocation; b = $0.location } }
-                    .onEnded { _ in doCrop(g.size) })
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { dragCrop($0, d) }
+                    .onEnded { _ in dm = nil })
             }
 
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 14) {
                     ForEach(files.indices, id: \.self) { n in
-                        Button { i = n; img = NSImage(contentsOf: files[n]) } label: {
+                        Button { crop = false; i = n; img = Gallery.load(files[n]) } label: {
                             GalleryThumb(url: files[n]).frame(width: 80, height: 80)
                                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(n == i ? Color.blue : .clear, lineWidth: 3))
                         }.buttonStyle(.plain)
@@ -630,9 +715,14 @@ struct GalleryView: View {
             }.frame(height: 96)
         }
         .background(Color(red: 0.09, green: 0.1, blue: 0.11))
+        .focusable().focused($foc).focusEffectDisabled()
+        .onAppear { foc = true }
         .onReceive(tick) { _ in if play { go(1) } }
         .onKeyPress(.leftArrow) { go(-1); return .handled }
         .onKeyPress(.rightArrow) { go(1); return .handled }
+        .onKeyPress(keys: [.delete, .deleteForward]) { _ in del(); return .handled }
+        .onKeyPress(.return) { if crop { saveCrop(); return .handled }; return .ignored }
+        .onKeyPress(.escape) { if crop { crop = false; return .handled }; return .ignored }
     }
 }
 
@@ -675,6 +765,23 @@ final class AppModel {
     var showCustomize = false
 
     @ObservationIgnored private var toastTask: Task<Void, Never>?
+    @ObservationIgnored private var selMonitor: Any?
+
+    /// Uygulamanın her yerindeki tıklama seçim işlemini sonlandırır
+    func installSelectionReset() {
+        guard selMonitor == nil else { return }
+        selMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .leftMouseUp]) { [weak self] e in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if e.type == .leftMouseUp {
+                    self.left.finishDragIfNeeded(); self.right.finishDragIfNeeded()
+                } else {
+                    self.left.endSelectMode(); self.right.endSelectMode()
+                }
+            }
+            return e
+        }
+    }
     @ObservationIgnored private var sharePicker: NSSharingServicePicker?
 
     init() {
@@ -1984,6 +2091,7 @@ struct DeckApp: App {
         Window("Deck", id: "main") {
             ContentView()
                 .environment(model)
+                .onAppear { model.installSelectionReset() }
                 .frame(minWidth: 960, minHeight: 560)
         }
         .defaultSize(width: 1180, height: 740)
