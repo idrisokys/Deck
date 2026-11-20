@@ -1,0 +1,66 @@
+name: Derle (macOS Apple Silicon)
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Deck.app derle
+    runs-on: macos-15          # Apple Silicon (arm64) çalıştırıcı, macOS 15 Sequoia
+
+    steps:
+      - name: Kodu çek
+        uses: actions/checkout@v4
+
+      - name: Araç sürümleri
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Derle
+        run: |
+          chmod +x Deck-build.sh
+          ./Deck-build.sh
+
+      - name: Uygulamayı doğrula
+        run: |
+          codesign --verify --deep --strict Deck.app
+          lipo -info Deck.app/Contents/MacOS/Deck
+          plutil -lint Deck.app/Contents/Info.plist
+          test -f Deck.app/Contents/Resources/Deck.icns
+
+      - name: ZIP paketi oluştur
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent Deck.app Deck-macOS-arm64.zip
+
+      - name: DMG oluştur
+        run: |
+          mkdir -p dmg-kok
+          cp -R Deck.app dmg-kok/
+          ln -s /Applications dmg-kok/Applications
+          hdiutil create -volname "Deck" -srcfolder dmg-kok -ov -format UDZO Deck-macOS-arm64.dmg
+
+      - name: Derleme çıktısını yükle (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Deck-macOS-arm64
+          path: |
+            Deck-macOS-arm64.zip
+            Deck-macOS-arm64.dmg
+
+      - name: Release yayınla (v* etiketi ile)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Deck-macOS-arm64.zip
+            Deck-macOS-arm64.dmg
+          generate_release_notes: true

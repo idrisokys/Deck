@@ -1,0 +1,6 @@
+.DS_Store
+Deck.app/
+*.zip
+*.dmg
+dmg-kok/
+build/
