@@ -257,8 +257,10 @@ func runProcess(_ exe: String, _ args: [String], cwd: URL? = nil) throws -> Proc
 final class PaneModel {
     var currentURL: URL
     var items: [FileItem] = []
-    var selection: Set<URL> = []
+    var selection: Set<URL> = [] { didSet { if selection.isEmpty { selectMode = false } } }
     var backStack: [URL] = []
+    /// Çoklu seçim modu: açıkken düz tıklama dosya/klasörü seçime ekler ya da çıkarır
+    var selectMode = false
 
     /// Resim / Belge / Arşiv süzgeci (klasörler her zaman görünür, böylece gezinilebilir)
     var typeFilter: FileFilter? { didSet { pruneSelection() } }
@@ -267,6 +269,8 @@ final class PaneModel {
 
     @ObservationIgnored weak var app: AppModel?
     @ObservationIgnored private var anchor: URL?
+    @ObservationIgnored private var dragBase: Set<URL>?
+    @ObservationIgnored private var suppressTapUntil = Date.distantPast
     @ObservationIgnored private var lastNavigation = Date.distantPast
     @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
 
@@ -358,8 +362,8 @@ final class PaneModel {
     // Seçim
 
     func click(_ item: FileItem, flags: NSEvent.ModifierFlags) {
-        if recentlyNavigated { return }
-        if flags.contains(.command) {
+        if recentlyNavigated || Date() < suppressTapUntil { return }
+        if flags.contains(.command) || selectMode {
             toggleSelect(item)
         } else if flags.contains(.shift),
                   let a = anchor,
@@ -378,6 +382,28 @@ final class PaneModel {
     func toggleSelect(_ item: FileItem) {
         if selection.contains(item.url) { selection.remove(item.url) } else { selection.insert(item.url) }
         anchor = item.url
+    }
+
+    /// Basılı tutup sürükleyerek çoklu seçim (fare / dokunmatik yüzey)
+    func dragSelect(from item: FileItem, y: CGFloat?, rowHeight: CGFloat = 40) {
+        let list = visibleItems
+        guard let start = list.firstIndex(where: { $0.url == item.url }) else { return }
+        if dragBase == nil {
+            dragBase = selection
+            anchor = item.url
+            selectMode = true
+            selection = dragBase!.union([item.url])
+        }
+        guard let y else { return }
+        let cur = max(0, min(list.count - 1, Int(y / rowHeight)))
+        let range = list[min(start, cur)...max(start, cur)].map(\.url)
+        selection = (dragBase ?? []).union(range)
+        selectMode = true
+    }
+
+    func endDragSelect() {
+        dragBase = nil
+        suppressTapUntil = Date().addingTimeInterval(0.3)
     }
 
     func ensureSelected(_ item: FileItem) {
@@ -1185,6 +1211,7 @@ struct FileList: View {
                     FileRow(pane: pane, side: side, item: item, striped: i % 2 == 1)
                 }
             }
+            .coordinateSpace(name: "fileList")
         }
         .id(pane.currentURL)
         .overlay {
@@ -1231,6 +1258,19 @@ struct FileRow: View {
         .onHover { hover = $0 }
         .simultaneousGesture(TapGesture(count: 2).onEnded { doubleClick() })
         .simultaneousGesture(TapGesture().onEnded { singleClick() })
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.4)
+                .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("fileList")))
+                .onChanged { value in
+                    switch value {
+                    case .second(true, let drag):
+                        app.activeSide = side
+                        pane.dragSelect(from: item, y: drag?.location.y)
+                    default: break
+                    }
+                }
+                .onEnded { _ in pane.endDragSelect() }
+        )
         .contextMenu {
             Button("Aç") { open() }
             Button(selected ? "Seçimi kaldır" : "Seç") {

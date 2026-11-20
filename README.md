@@ -78,6 +78,7 @@ chmod +x Deck-build.sh
 ## Kullanım notları
 
 - Klasöre **tek tıkla** girilir. Klasör seçmek için **⌘ + tıklama**; dosyalar tek tıkla seçilir, **⇧ + tıklama** aralık seçer.
+- **Fareyle çoklu seçim:** bir dosyanın üzerinde fareyi/basılı tutun (yaklaşık yarım saniye), seçim modu açılır; basılı tutarak aşağı/yukarı sürükleyip birden çok dosya seçin. Seçim modundayken tek tıklama dosya/klasörü seçime ekler ya da çıkarır; seçim boşalınca mod kapanır.
 - **ZIP** dosyasına çift tıklayınca, aynı yerde ZIP'in adını taşıyan klasöre çıkarılır.
 - **Kopyala** ve **Taşı** etkin panelden diğer panele çalışır.
 - Varsayılan sıralama: oluşturma tarihi, en yeni en üstte.
