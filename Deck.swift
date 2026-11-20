@@ -482,6 +482,176 @@ final class PaneModel {
     }
 }
 
+// MARK: - Galeri (varsayılan resim görüntüleyici)
+
+enum Gallery {
+    static var win: NSWindow?
+    static let exts = ["jpg", "jpeg", "png", "heic", "gif", "tiff", "bmp", "webp"]
+
+    static func isImage(_ u: URL) -> Bool { exts.contains(u.pathExtension.lowercased()) }
+
+    static func siblings(of u: URL) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: u.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? [])
+            .filter { isImage($0) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    }
+
+    /// Dosyayı açar: resimse galeride, değilse sistemin varsayılan uygulamasında.
+    static func open(_ u: URL) {
+        guard isImage(u) else { NSWorkspace.shared.open(u); return }
+        let v = NSHostingView(rootView: GalleryView(start: u))
+        if let w = win { w.contentView = v; w.makeKeyAndOrderFront(nil); return }
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                         backing: .buffered, defer: false)
+        w.title = "Galeri"; w.isReleasedWhenClosed = false
+        w.appearance = NSAppearance(named: .darkAqua)
+        w.collectionBehavior = [.fullScreenPrimary]
+        w.contentView = v; w.center(); w.makeKeyAndOrderFront(nil)
+        win = w
+    }
+
+    static func xform(_ m: NSImage, _ size: NSSize, _ t: @escaping (NSAffineTransform) -> Void) -> NSImage {
+        NSImage(size: size, flipped: false) { _ in
+            let a = NSAffineTransform(); t(a); a.concat()
+            m.draw(at: .zero, from: .zero, operation: .copy, fraction: 1); return true
+        }
+    }
+}
+
+struct GalleryView: View {
+    @State var files: [URL]
+    @State var i: Int
+    @State var img: NSImage?
+    @State var crop = false
+    @State var play = false
+    @State var a: CGPoint?
+    @State var b: CGPoint?
+    let tick = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+
+    init(start: URL) {
+        let fs = Gallery.siblings(of: start)
+        _files = State(initialValue: fs)
+        _i = State(initialValue: fs.firstIndex(of: start) ?? 0)
+        _img = State(initialValue: NSImage(contentsOf: start))
+    }
+
+    func btn(_ s: String, _ on: Bool = false, _ f: @escaping () -> Void) -> some View {
+        Button(action: f) {
+            Image(systemName: s).font(.title2).frame(width: 44, height: 40)
+                .background(on ? Color.blue : .clear).cornerRadius(8)
+        }.buttonStyle(.plain).foregroundColor(.white)
+    }
+
+    func go(_ d: Int) {
+        guard !files.isEmpty else { return }
+        i = (i + d + files.count) % files.count; img = NSImage(contentsOf: files[i])
+    }
+
+    func open() {
+        let p = NSOpenPanel(); p.allowedContentTypes = [.image]
+        guard p.runModal() == .OK, let u = p.url else { return }
+        files = Gallery.siblings(of: u); i = files.firstIndex(of: u) ?? 0; img = NSImage(contentsOf: u)
+    }
+
+    func rot(_ d: CGFloat) {
+        guard let m = img else { return }; let s = m.size, n = NSSize(width: s.height, height: s.width)
+        img = Gallery.xform(m, n) { $0.translateX(by: n.width / 2, yBy: n.height / 2); $0.rotate(byDegrees: d); $0.translateX(by: -s.width / 2, yBy: -s.height / 2) }
+    }
+
+    func flip(_ h: Bool) {
+        guard let m = img else { return }; let s = m.size
+        img = Gallery.xform(m, s) { $0.translateX(by: h ? s.width : 0, yBy: h ? 0 : s.height); $0.scaleX(by: h ? -1 : 1, yBy: h ? 1 : -1) }
+    }
+
+    func doCrop(_ v: CGSize) {
+        defer { a = nil; b = nil; crop = false }
+        guard crop, let a, let b, let m = img else { return }
+        let s = m.size, k = min(v.width / s.width, v.height / s.height)
+        let ox = (v.width - s.width * k) / 2, oy = (v.height - s.height * k) / 2
+        let r = CGRect(x: (min(a.x, b.x) - ox) / k, y: s.height - (max(a.y, b.y) - oy) / k,
+                       width: abs(a.x - b.x) / k, height: abs(a.y - b.y) / k)
+            .intersection(CGRect(origin: .zero, size: s))
+        guard r.width > 4, r.height > 4 else { return }
+        img = NSImage(size: r.size, flipped: false) { _ in m.draw(at: .zero, from: r, operation: .copy, fraction: 1); return true }
+    }
+
+    func del() {
+        guard !files.isEmpty else { return }
+        try? FileManager.default.trashItem(at: files[i], resultingItemURL: nil)
+        files.remove(at: i)
+        if files.isEmpty { img = nil; i = 0 } else { i = min(i, files.count - 1); img = NSImage(contentsOf: files[i]) }
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                btn("arrow.left") { go(-1) }
+                btn("arrow.right") { go(1) }
+                Divider().frame(height: 30)
+                btn("rotate.left") { rot(90) }
+                btn("rotate.right") { rot(-90) }
+                btn("flip.horizontal") { flip(true) }
+                btn("arrow.up.and.down.righttriangle.up.righttriangle.down") { flip(false) }
+                btn("crop", crop) { crop.toggle() }
+                btn("arrow.up.left.and.arrow.down.right") { NSApp.keyWindow?.toggleFullScreen(nil) }
+                btn("play.rectangle.on.rectangle", play) { play.toggle(); NSApp.keyWindow?.toggleFullScreen(nil) }
+                Divider().frame(height: 30)
+                btn("trash") { del() }
+                btn("folder") { open() }
+            }.padding(.top, 8)
+
+            GeometryReader { g in
+                ZStack(alignment: .topLeading) {
+                    if let m = img {
+                        Image(nsImage: m).resizable().scaledToFit().frame(width: g.size.width, height: g.size.height)
+                    }
+                    if crop, let a, let b {
+                        Rectangle().stroke(Color.yellow, lineWidth: 2)
+                            .frame(width: abs(a.x - b.x), height: abs(a.y - b.y))
+                            .offset(x: min(a.x, b.x), y: min(a.y, b.y))
+                    }
+                }
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 5)
+                    .onChanged { if crop { a = a ?? $0.startLocation; b = $0.location } }
+                    .onEnded { _ in doCrop(g.size) })
+            }
+
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 14) {
+                    ForEach(files.indices, id: \.self) { n in
+                        Button { i = n; img = NSImage(contentsOf: files[n]) } label: {
+                            GalleryThumb(url: files[n]).frame(width: 80, height: 80)
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(n == i ? Color.blue : .clear, lineWidth: 3))
+                        }.buttonStyle(.plain)
+                    }
+                }.padding(.horizontal, 12)
+            }.frame(height: 96)
+        }
+        .background(Color(red: 0.09, green: 0.1, blue: 0.11))
+        .onReceive(tick) { _ in if play { go(1) } }
+        .onKeyPress(.leftArrow) { go(-1); return .handled }
+        .onKeyPress(.rightArrow) { go(1); return .handled }
+    }
+}
+
+struct GalleryThumb: View {
+    let url: URL
+    @State var t: NSImage?
+    var body: some View {
+        Group { if let t { Image(nsImage: t).resizable().scaledToFit() } else { Color.clear } }
+            .task {
+                t = await Task.detached {
+                    guard let m = NSImage(contentsOf: url) else { return nil as NSImage? }
+                    let k = 160 / max(m.size.width, m.size.height)
+                    let n = NSSize(width: m.size.width * k, height: m.size.height * k)
+                    return NSImage(size: n, flipped: false) { r in m.draw(in: r); return true }
+                }.value
+            }
+    }
+}
+
 // MARK: - Uygulama modeli
 
 @Observable
@@ -1303,7 +1473,7 @@ struct FileRow: View {
 
     private func open() {
         app.activeSide = side
-        if item.isEnterable { pane.navigate(to: item.url) } else { NSWorkspace.shared.open(item.url) }
+        if item.isEnterable { pane.navigate(to: item.url) } else { Gallery.open(item.url) }
     }
 
     private func singleClick() {
@@ -1316,7 +1486,7 @@ struct FileRow: View {
         if item.isZip {
             app.extractZips([item.url])          // çift tık: ZIP'i klasöre çıkar
         } else {
-            NSWorkspace.shared.open(item.url)
+            Gallery.open(item.url)
         }
     }
 }
