@@ -306,7 +306,11 @@ final class PaneModel {
     }
 
     /// Klasöre girdikten hemen sonra gelen ikinci tıkı (çift tık) yok sayar.
-    var recentlyNavigated: Bool { Date().timeIntervalSince(lastNavigation) < 0.35 }
+    /// Yalnızca gerçek bir çift tıkın ikinci tıkı yok sayılır; ayrı, bilinçli tıklamalar kaybolmaz.
+    var recentlyNavigated: Bool {
+        guard Date().timeIntervalSince(lastNavigation) < 0.5 else { return false }
+        return (NSApp.currentEvent?.clickCount ?? 1) >= 2
+    }
 
     func start() {
         navigate(to: currentURL, record: false)
@@ -454,7 +458,7 @@ final class PaneModel {
 
     func endDragSelect() {
         dragBase = nil
-        suppressTapUntil = Date().addingTimeInterval(0.3)
+        suppressTapUntil = Date().addingTimeInterval(0.12)
     }
 
     func ensureSelected(_ item: FileItem) {
@@ -1238,6 +1242,7 @@ struct ContentView: View {
                 CenterColumn().frame(width: 196)
                 PaneView(pane: app.right, side: .right)
             }
+            PathBar()
         }
         .background(Theme.background)
         .preferredColorScheme(.dark)
@@ -1343,7 +1348,6 @@ struct PaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            BreadcrumbBar(pane: pane, side: side)
             ColumnHeader()
             FileList(pane: pane, side: side)
         }
@@ -1402,14 +1406,14 @@ struct ClickTracker: NSViewRepresentable {
     }
 }
 
-struct BreadcrumbBar: View {
-    let pane: PaneModel
-    let side: Side
+/// Alttaki tek yol çubuğu: etkin (işaretli) panelde hangi klasör açıksa onun yolunu gösterir.
+/// Yoldaki bir parçaya tıklamak etkin paneli o konuma götürür.
+struct PathBar: View {
     @Environment(AppModel.self) var app
 
     var crumbs: [(name: String, url: URL)] {
         var result: [(name: String, url: URL)] = []
-        var url = pane.currentURL.standardizedFileURL
+        var url = app.active.currentURL.standardizedFileURL
         while true {
             let isRoot = url.path == "/"
             let name = isRoot ? FileManager.default.displayName(atPath: "/") : url.lastPathComponent
@@ -1421,23 +1425,28 @@ struct BreadcrumbBar: View {
     }
 
     var body: some View {
+        let pane = app.active
         let list = crumbs
-        HStack(spacing: 8) {
-            Button { app.activeSide = side; pane.goBack() } label: {
+        HStack(spacing: 6) {
+            Button { pane.goBack() } label: {
                 Image(systemName: "chevron.backward")
+                    .frame(width: 30, height: 34)
+                    .contentShape(Rectangle())
             }
             .disabled(pane.backStack.isEmpty)
             .help("Geri")
 
-            Button { app.activeSide = side; pane.goUp() } label: {
+            Button { pane.goUp() } label: {
                 Image(systemName: "arrow.up")
+                    .frame(width: 30, height: 34)
+                    .contentShape(Rectangle())
             }
             .disabled(pane.currentURL.normPath == "/")
             .help("Üst klasör")
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 2) {
                         ForEach(Array(list.enumerated()), id: \.offset) { i, c in
                             if i > 0 {
                                 Image(systemName: "chevron.right")
@@ -1445,7 +1454,6 @@ struct BreadcrumbBar: View {
                                     .foregroundStyle(.secondary)
                             }
                             Button {
-                                app.activeSide = side
                                 pane.navigate(to: c.url)
                             } label: {
                                 HStack(spacing: 6) {
@@ -1463,14 +1471,20 @@ struct BreadcrumbBar: View {
                                         .foregroundStyle(.white.opacity(0.92))
                                         .lineLimit(1)
                                 }
+                                .padding(.horizontal, 6)
+                                .frame(height: 34)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .id(i)
                         }
                     }
                 }
-                .onChange(of: pane.currentURL) {
+                .onChange(of: app.active.currentURL) {
                     proxy.scrollTo(list.count - 1, anchor: .trailing)
+                }
+                .onChange(of: app.activeSide) {
+                    proxy.scrollTo(crumbs.count - 1, anchor: .trailing)
                 }
                 .onAppear {
                     proxy.scrollTo(list.count - 1, anchor: .trailing)
@@ -1478,12 +1492,12 @@ struct BreadcrumbBar: View {
             }
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, 12)
-        .frame(height: 46)
+        .padding(.horizontal, 10)
+        .frame(height: 44)
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bar))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(app.activeSide == side ? Theme.accent.opacity(0.85) : Color.clear, lineWidth: 1.5)
+                .stroke(Theme.accent.opacity(0.85), lineWidth: 1.5)
                 .allowsHitTesting(false)
         )
         .padding(8)
@@ -1583,7 +1597,7 @@ struct FileRow: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { doubleClick() })
         .simultaneousGesture(TapGesture().onEnded { singleClick() })
         .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.4)
+            LongPressGesture(minimumDuration: 0.6, maximumDistance: 6)
                 .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("fileList")))
                 .onChanged { value in
                     switch value {
@@ -1929,6 +1943,10 @@ struct FilterBar: View {
                 .focused($searchFocused)
                 .onExitCommand { app.active.query = ""; searchFocused = false }
                 .onSubmit { app.active.openPath(app.active.query) }
+                // Yapıştırma tek seferde birden çok karakter ekler: yol ise Enter beklemeden açılır.
+                .onChange(of: pane.query) { old, new in
+                    if new.count - old.count > 1 { app.active.openPath(new) }
+                }
                 if !pane.query.isEmpty {
                     Button { app.active.query = "" } label: {
                         Image(systemName: "xmark.circle.fill")

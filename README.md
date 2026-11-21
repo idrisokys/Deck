@@ -84,4 +84,5 @@ chmod +x Deck-build.sh
 - Varsayılan sıralama: oluşturma tarihi, en yeni en üstte.
 - Üst bar boş başlar. **Yer imleri** düğmesi seçili klasörü (seçili yoksa açık klasörü) üst bara ekler; barda zaten varsa kaldırır. Bardaki klasöre tıklayınca, en son tıkladığınız (etkin) panelde doğrudan açılır.
 - Kısayollar: ⇧⌘N yeni klasör, ⌘⌫ sil, ⌘R yenile, ⌘[ geri, ⌘↑ üst klasör, ⌥⌘C kopyala, ⌥⌘M taşı.
-- **Yol ile açma:** arama kutusuna bir dosya ya da klasör yolu (`/Users/ad/Belgeler`, `~/Masaüstü`, tırnaklı ya da `file://` biçimi dahil) yapıştırıp **Enter**'a basınca, etkin panelde o klasör açılır; yol bir dosyaysa bulunduğu klasör açılıp dosya seçilir.
+- **Yol ile açma:** arama kutusuna bir dosya ya da klasör yolu (`/Users/ad/Belgeler`, `~/Masaüstü`, tırnaklı ya da `file://` biçimi dahil) yapıştırdığınız anda (**Enter'a gerek kalmadan**; elle yazarsanız Enter ile) etkin panelde o klasör açılır; yol bir dosyaysa bulunduğu klasör açılıp dosya seçilir.
+- **Yol çubuğu:** pencerenin altında tek satır halinde, etkin panelde açık olan klasörün yolunu gösterir. Yoldaki bir parçaya tıklayınca etkin panel o konuma gider.
