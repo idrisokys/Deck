@@ -49,19 +49,19 @@ enum SortKey: String, CaseIterable, Identifiable {
 }
 
 enum ActionButton: String, CaseIterable, Identifiable {
-    case newFolder, customize, sort, hidden, copy, move, duplicate, rename, unzip, zip, trash, share, info, bookmark
+    case newFolder, undoDelete, sort, hidden, copy, move, duplicate, rename, unzip, zip, trash, share, info, bookmark
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .newFolder: "Yeni klasör"
-        case .customize: "Düğmeleri ayarla"
+        case .undoDelete: "Silme Geri"
         case .sort: "Sıralama"
         case .hidden: "Gizliyi göster"
         case .copy: "Kopyala"
         case .move: "Taşı"
-        case .duplicate: "Kopyasını oluştur"
-        case .rename: "Yeniden adlandır"
+        case .duplicate: "Kopyası"
+        case .rename: "Yeni ad"
         case .unzip: "ZIP çıkar"
         case .zip: "ZIP oluştur"
         case .trash: "Sil"
@@ -74,7 +74,7 @@ enum ActionButton: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .newFolder: "folder.badge.plus"
-        case .customize: "square.grid.2x2"
+        case .undoDelete: "arrow.uturn.backward"
         case .sort: "arrow.up.arrow.down"
         case .hidden: "eye.slash"
         case .copy: "doc.on.doc"
@@ -93,7 +93,7 @@ enum ActionButton: String, CaseIterable, Identifiable {
     var color: Color {
         switch self {
         case .newFolder: .yellow
-        case .customize: .white
+        case .undoDelete: .blue
         case .sort: .red
         case .hidden: .blue
         case .copy: .teal
@@ -537,6 +537,40 @@ final class PaneModel {
     }
 }
 
+// MARK: - Silme geçmişi (Silme Geri için)
+
+struct TrashedItem {
+    let original: URL
+    let trashed: URL
+}
+
+/// Çöp Kutusu'na atılan öğelerin yığını; ana pencere ve Galeri aynı kaydı kullanır.
+enum TrashLog {
+    static var batches: [[TrashedItem]] = []
+
+    /// URL'leri onay sormadan Çöp Kutusu'na atar ve tek bir silme eylemi olarak kaydeder.
+    @discardableResult
+    static func trash(_ urls: [URL]) -> (done: Int, error: Error?) {
+        var items: [TrashedItem] = []
+        var lastError: Error?
+        for u in urls {
+            do {
+                var result: NSURL?
+                try FileManager.default.trashItem(at: u, resultingItemURL: &result)
+                if let r = result as URL? { items.append(TrashedItem(original: u, trashed: r)) }
+                else { items.append(TrashedItem(original: u, trashed: u)) }
+            } catch {
+                lastError = error
+            }
+        }
+        if !items.isEmpty {
+            batches.append(items)
+            if batches.count > 50 { batches.removeFirst() }
+        }
+        return (items.count, lastError)
+    }
+}
+
 // MARK: - Galeri (varsayılan resim görüntüleyici)
 
 enum Gallery {
@@ -635,7 +669,7 @@ struct GalleryView: View {
     func del() {
         guard !files.isEmpty else { return }
         crop = false
-        try? FileManager.default.trashItem(at: files[i], resultingItemURL: nil)
+        guard TrashLog.trash([files[i]]).done == 1 else { return }   // onay sormadan doğrudan Çöp Kutusu'na
         files.remove(at: i)
         if files.isEmpty { img = nil; i = 0 } else { i = min(i, files.count - 1); img = Gallery.load(files[i]) }
     }
@@ -807,16 +841,35 @@ final class AppModel {
     var showHidden = false
 
     var bookmarks: [URL]
-    var hiddenButtons: Set<String>
 
     var toast: String?
     var showPrompt = false
     var prompt: PromptKind = .newFolder
     var promptText = ""
-    var showCustomize = false
 
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var selMonitor: Any?
+    @ObservationIgnored private var keyMonitor: Any?
+
+    /// Ana pencerede ⌫ (Delete) tuşu: seçili öğelerin hepsini onay sormadan Çöp Kutusu'na atar.
+    func installDeleteKey() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            var swallow = false
+            MainActor.assumeIsolated {
+                guard let self, e.keyCode == 51 || e.keyCode == 117 else { return }
+                let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    .subtracting([.function, .numericPad, .capsLock])
+                guard mods.isEmpty, let w = e.window, w.isKeyWindow, w !== Gallery.win,
+                      w.attachedSheet == nil, !self.showPrompt,
+                      !(w.firstResponder is NSText) else { return }      // arama / ad kutusuna yazarken karışma
+                guard !self.active.selectedItems.isEmpty else { return }
+                self.trashSelected()
+                swallow = true
+            }
+            return swallow ? nil : e
+        }
+    }
 
     /// Uygulamanın her yerindeki tıklama seçim işlemini sonlandırır
     func installSelectionReset() {
@@ -846,7 +899,6 @@ final class AppModel {
         }
         let saved = UserDefaults.standard.stringArray(forKey: "bookmarks")
         bookmarks = saved?.map { URL(fileURLWithPath: $0) } ?? []
-        hiddenButtons = Set(UserDefaults.standard.stringArray(forKey: "hiddenButtons") ?? [])
         left.app = self
         right.app = self
         left.start()
@@ -950,11 +1002,6 @@ final class AppModel {
 
     private func saveBookmarks() {
         UserDefaults.standard.set(bookmarks.map(\.path), forKey: "bookmarks")
-    }
-
-    func setButton(_ b: ActionButton, visible: Bool) {
-        if visible { hiddenButtons.remove(b.rawValue) } else { hiddenButtons.insert(b.rawValue) }
-        UserDefaults.standard.set(Array(hiddenButtons), forKey: "hiddenButtons")
     }
 
     // MARK: İşlemler
@@ -1069,22 +1116,46 @@ final class AppModel {
 
     func trashSelected() {
         guard let items = requireSelection() else { return }
-        var done = 0
-        var lastError: Error?
-        for item in items {
-            do {
-                try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
-                done += 1
-            } catch {
-                lastError = error
-            }
-        }
+        let r = TrashLog.trash(items.map(\.url))
         active.selection = []
         reloadAll()
-        if let e = lastError, done == 0 {
+        if let e = r.error, r.done == 0 {
             showToast("Silinemedi: \(e.localizedDescription)")
         } else {
-            showToast("\(done) öğe Çöp Kutusu'na taşındı.")
+            showToast("\(r.done) öğe Çöp Kutusu'na taşındı.")
+        }
+    }
+
+    /// Son silme eylemini geri alır: öğeleri Çöp Kutusu'ndan özgün yerlerine taşır.
+    func undoDelete() {
+        guard let batch = TrashLog.batches.popLast() else {
+            showToast("Geri alınacak bir silme işlemi yok.")
+            return
+        }
+        let fm = FileManager.default
+        var restored: [URL] = []
+        var left: [TrashedItem] = []
+        for it in batch {
+            guard fm.fileExists(atPath: it.trashed.path) else { continue }   // Çöp boşaltılmış olabilir
+            let dir = it.original.deletingLastPathComponent()
+            let isDir = (try? it.trashed.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let dest = fm.fileExists(atPath: it.original.path)
+                ? AppModel.uniqueURL(for: it.original, isDir: isDir, in: dir)
+                : it.original
+            do {
+                try fm.moveItem(at: it.trashed, to: dest)
+                restored.append(dest)
+            } catch {
+                left.append(it)
+            }
+        }
+        if !left.isEmpty { TrashLog.batches.append(left) }
+        reloadAll()
+        if restored.isEmpty {
+            showToast("Silme geri alınamadı (öğe Çöp Kutusu'nda bulunamadı).")
+        } else {
+            active.selection = Set(restored)
+            showToast("\(restored.count) öğe geri getirildi.")
         }
     }
 
@@ -1251,7 +1322,6 @@ struct ContentView: View {
             Button("Tamam") { app.confirmPrompt() }
             Button("İptal", role: .cancel) {}
         }
-        .sheet(isPresented: $model.showCustomize) { CustomizeSheet() }
         .overlay(alignment: .bottom) {
             if let t = app.toast {
                 Text(t)
@@ -1707,6 +1777,69 @@ struct SortArrow: Shape {
     }
 }
 
+/// Silme Geri: mavi çöp kutusu ve ona doğru geri dönen ok
+struct UndoTrashGlyph: View {
+    private let ink = Color(red: 0.03, green: 0.07, blue: 0.16)
+
+    var body: some View {
+        ZStack {
+            ZStack {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)      // kutu gövdesi
+                    .fill(glyphBlue)
+                    .frame(width: 16, height: 19)
+                    .offset(y: 3.5)
+                Capsule().fill(glyphBlue)                                  // kapak
+                    .frame(width: 22, height: 4)
+                    .offset(y: -8)
+                Capsule().fill(glyphBlue)                                  // tutamak
+                    .frame(width: 8, height: 3)
+                    .offset(y: -11.5)
+                Rectangle().fill(ink).frame(width: 1.8, height: 11)        // yarıklar
+                    .offset(x: -3.5, y: 4)
+                Rectangle().fill(ink).frame(width: 1.8, height: 11)
+                    .offset(x: 3.5, y: 4)
+            }
+            .offset(x: 11, y: 2)
+            UndoArrow()
+                .stroke(glyphBlue, style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
+                .frame(width: 26, height: 26)
+                .offset(x: -10, y: -3)
+        }
+        .frame(width: 46, height: 38)
+        .shadow(color: Color(red: 0.2, green: 0.6, blue: 1.0).opacity(0.45), radius: 3)
+    }
+}
+
+/// Saat yönünün tersine dönen ok (geri al)
+struct UndoArrow: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        let c = CGPoint(x: r.midX, y: r.midY + 2)
+        let rad = min(r.width, r.height) * 0.38
+        func pt(_ deg: Double) -> CGPoint {
+            let a = deg * Double.pi / 180
+            return CGPoint(x: c.x + rad * CGFloat(cos(a)), y: c.y - rad * CGFloat(sin(a)))
+        }
+        let endDeg = 205.0
+        p.move(to: pt(0))
+        var d = 5.0
+        while d <= endDeg { p.addLine(to: pt(d)); d += 5 }
+        // ok başı: uçtaki yönün tersine ±45°
+        let tip = pt(endDeg)
+        let a = endDeg * Double.pi / 180
+        let bx = sin(a), by = cos(a)          // -(hareket yönü)
+        func head(_ deg: Double) -> CGPoint {
+            let t = deg * Double.pi / 180
+            let x = bx * cos(t) - by * sin(t)
+            let y = bx * sin(t) + by * cos(t)
+            return CGPoint(x: tip.x + 7 * CGFloat(x), y: tip.y + 7 * CGFloat(y))
+        }
+        p.move(to: tip); p.addLine(to: head(45))
+        p.move(to: tip); p.addLine(to: head(-45))
+        return p
+    }
+}
+
 /// Yeniden adlandır: iki metin çizgisi, alt çizgi ve büyük mavi kalem
 struct RenameGlyph: View {
     var body: some View {
@@ -1784,6 +1917,8 @@ struct ActionCell: View {
                     SortGlyph()
                 case .rename:
                     RenameGlyph()
+                case .undoDelete:
+                    UndoTrashGlyph()
                 default:
                     Image(systemName: symbol)
                         .font(.system(size: 30))
@@ -1974,7 +2109,7 @@ struct CenterColumn: View {
     @State private var showSort = false
 
     private var visible: [ActionButton] {
-        ActionButton.allCases.filter { $0 == .customize || !app.hiddenButtons.contains($0.rawValue) }
+        ActionButton.allCases
     }
 
     var body: some View {
@@ -2058,7 +2193,7 @@ struct CenterColumn: View {
     private func perform(_ b: ActionButton) {
         switch b {
         case .newFolder: app.beginNewFolder()
-        case .customize: app.showCustomize = true
+        case .undoDelete: app.undoDelete()
         case .sort: break
         case .hidden: app.toggleHidden()
         case .copy: app.transfer(move: false)
@@ -2072,39 +2207,6 @@ struct CenterColumn: View {
         case .info: app.showInfo()
         case .bookmark: app.toggleBookmark()
         }
-    }
-}
-
-struct CustomizeSheet: View {
-    @Environment(AppModel.self) var app
-    @Environment(\.dismiss) var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Düğmeleri ayarla").font(.title2.bold())
-            Text("Ortadaki sütunda görünmesini istediğiniz düğmeleri seçin.")
-                .foregroundStyle(.secondary)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(ActionButton.allCases.filter { $0 != .customize }) { b in
-                        Toggle(isOn: Binding(
-                            get: { !app.hiddenButtons.contains(b.rawValue) },
-                            set: { app.setButton(b, visible: $0) }
-                        )) {
-                            Label(b.title, systemImage: b.symbol)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack {
-                Button("Yer imlerini temizle") { app.resetBookmarks() }
-                Spacer()
-                Button("Bitti") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(22)
-        .frame(width: 400, height: 540)
     }
 }
 
@@ -2133,6 +2235,7 @@ struct AppCommands: Commands {
                 .keyboardShortcut("m", modifiers: [.command, .option])
             Button("Çöp Kutusuna Taşı") { model.trashSelected() }
                 .keyboardShortcut(.delete, modifiers: .command)
+            Button("Silme Geri") { model.undoDelete() }
         }
     }
 }
@@ -2185,7 +2288,7 @@ struct DeckApp: App {
         Window("Deck", id: "main") {
             ContentView()
                 .environment(model)
-                .onAppear { model.installSelectionReset() }
+                .onAppear { model.installSelectionReset(); model.installDeleteKey() }
                 .frame(minWidth: 960, minHeight: 560)
         }
         .defaultSize(width: 1180, height: 740)
