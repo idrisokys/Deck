@@ -289,7 +289,9 @@ final class PaneModel {
         let q = query.trimmingCharacters(in: .whitespaces)
         if typeFilter == nil && q.isEmpty { return items }
         return items.filter { item in
-            if let f = typeFilter, !item.isDirectory || item.isPackage {
+            if let f = typeFilter {
+                // Süzgeç yalnızca açık klasördeki dosyaları gösterir; alt klasörler listeye girmez
+                if item.isDirectory && !item.isPackage { return false }
                 if !f.extensions.contains(item.url.pathExtension.lowercased()) { return false }
             }
             if !q.isEmpty {
