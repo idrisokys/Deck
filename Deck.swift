@@ -50,19 +50,19 @@ enum SortKey: String, CaseIterable, Identifiable {
 }
 
 enum ActionButton: String, CaseIterable, Identifiable {
-    case newFolder, customize, sort, hidden, copy, move, duplicate, rename, unzip, zip, trash, share, info, bookmark
+    case trash, undoDelete, sort, hidden, copy, move, duplicate, rename, unzip, zip, newFolder, share, info, bookmark
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .newFolder: "Yeni klasör"
-        case .customize: "Düğmeleri ayarla"
+        case .undoDelete: "Silme Geri"
         case .sort: "Sıralama"
         case .hidden: "Gizliyi göster"
         case .copy: "Kopyala"
         case .move: "Taşı"
-        case .duplicate: "Kopyasını oluştur"
-        case .rename: "Yeniden adlandır"
+        case .duplicate: "Kopyası"
+        case .rename: "Yeni ad"
         case .unzip: "ZIP çıkar"
         case .zip: "ZIP oluştur"
         case .trash: "Sil"
@@ -75,7 +75,7 @@ enum ActionButton: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .newFolder: "folder.badge.plus"
-        case .customize: "square.grid.2x2"
+        case .undoDelete: "arrow.uturn.backward"
         case .sort: "arrow.up.arrow.down"
         case .hidden: "eye.slash"
         case .copy: "doc.on.doc"
@@ -94,7 +94,7 @@ enum ActionButton: String, CaseIterable, Identifiable {
     var color: Color {
         switch self {
         case .newFolder: .yellow
-        case .customize: .white
+        case .undoDelete: .blue
         case .sort: .red
         case .hidden: .blue
         case .copy: .teal
@@ -143,16 +143,17 @@ enum FileFilter: String, CaseIterable, Identifiable {
 
 struct FileItem: Identifiable, Hashable {
     let url: URL
-    let name: String          // bir kez hesaplanır (url.lastPathComponent pahalıdır)
-    let iconKey: String       // simge önbellek anahtarı
     let isDirectory: Bool
     let isPackage: Bool
     let created: Date
     let modified: Date
     let size: Int64
     let kind: String
+    /// Arama için önceden hazırlanmış (küçük harf, aksansız) ad
+    let searchKey: String
 
     var id: URL { url }
+    var name: String { url.lastPathComponent }
     /// Tek tıkla içine girilebilen klasör (.app gibi paketler hariç)
     var isEnterable: Bool { isDirectory && !isPackage }
     var isZip: Bool { !isDirectory && url.pathExtension.lowercased() == "zip" }
@@ -171,9 +172,7 @@ enum DateText {
 }
 
 enum Places {
-    static let home: String = FileManager.default.homeDirectoryForCurrentUser.path
-    private static let titleCache = NSCache<NSString, NSString>()
-    static let rootName: String = FileManager.default.displayName(atPath: "/")
+    static var home: String { FileManager.default.homeDirectoryForCurrentUser.path }
 
     static func symbol(for url: URL) -> String {
         let p = url.normPath
@@ -204,98 +203,55 @@ enum Places {
         case h + "/Movies": return "Filmler"
         case h + "/Music": return "Müzik"
         default:
-            // displayName diske gider; her çizimde tekrarlanmasın diye önbelleğe alınır
-            if let t = titleCache.object(forKey: p as NSString) { return t as String }
+            if let cached = titleCache[p] { return cached }
             let t = FileManager.default.displayName(atPath: p)
-            titleCache.setObject(t as NSString, forKey: p as NSString)
+            titleCache[p] = t
             return t
         }
     }
+
+    /// displayName pahalı bir sistem çağrısı; görünüm her yenilendiğinde tekrarlanmasın
+    private static var titleCache: [String: String] = [:]
 }
 
 /// Finder'ın kendi (sistem) simgelerini kullanır.
-/// Önbellekte yoksa görünüm önce genel bir simge gösterir, gerçeğini arka planda yükler;
-/// böylece liste çizilirken ana iş parçacığı disk / LaunchServices sorgularında beklemez.
 enum IconCache {
-    static let cache: NSCache<NSString, NSImage> = {
-        let c = NSCache<NSString, NSImage>()
-        c.countLimit = 4000
-        return c
-    }()
-    static let genericFolder: NSImage = NSWorkspace.shared.icon(for: .folder)
-    static let genericFile: NSImage = NSWorkspace.shared.icon(for: .data)
+    static let cache = NSCache<NSString, NSImage>()
 
-    /// Yalnızca önbelleğe bakar (bloke etmez)
-    static func cached(key: String) -> NSImage? {
-        cache.object(forKey: key as NSString)
-    }
-
-    static func cached(path: String) -> NSImage? {
-        cache.object(forKey: ("p:" + path) as NSString)
-    }
-
-    static func placeholder(for item: FileItem) -> NSImage {
-        item.isDirectory && !item.isPackage ? genericFolder : genericFile
-    }
-
-    /// Bloke edebilir: arka plan iş parçacığında çağrılmalıdır.
+    /// Klasörler ve uzantılar için tek ortak simge kullanılır; yalnızca .app paketleri
+    /// kendi simgesini taşıdığından yol başına yüklenir. Böylece her satır için
+    /// ayrı ayrı (yavaş) sistem simgesi sorgusu yapılmaz.
     static func icon(for item: FileItem) -> NSImage {
-        if let c = cache.object(forKey: item.iconKey as NSString) { return c }
+        let ext = item.url.pathExtension.lowercased()
+        let key: String
+        if item.isDirectory && !item.isPackage {
+            key = "folder"
+        } else if item.isPackage && ext == "app" {
+            key = "p:" + item.url.path
+        } else {
+            key = "e:" + ext
+        }
+        if let cached = cache.object(forKey: key as NSString) { return cached }
         let image: NSImage
-        if item.iconKey.hasPrefix("e:"),
-           let type = UTType(filenameExtension: String(item.iconKey.dropFirst(2))) {
+        if key == "folder" {
+            image = NSWorkspace.shared.icon(for: .folder)
+        } else if key.hasPrefix("p:") {
+            image = NSWorkspace.shared.icon(forFile: item.url.path)
+        } else if !ext.isEmpty, let type = UTType(filenameExtension: ext) {
             image = NSWorkspace.shared.icon(for: type)
         } else {
-            image = NSWorkspace.shared.icon(forFile: item.url.path)
+            image = NSWorkspace.shared.icon(for: item.isPackage ? .package : .data)
         }
-        cache.setObject(image, forKey: item.iconKey as NSString)
+        cache.setObject(image, forKey: key as NSString)
         return image
     }
 
-    /// Bloke edebilir: arka plan iş parçacığında çağrılmalıdır.
     static func icon(forPath path: String) -> NSImage {
         let key = "p:" + path
         if let cached = cache.object(forKey: key as NSString) { return cached }
         let image = NSWorkspace.shared.icon(forFile: path)
         cache.setObject(image, forKey: key as NSString)
         return image
-    }
-}
-
-/// Satır simgesi: önbellekteyse hemen, değilse genel simgeyle başlar ve arka planda yüklenir.
-struct FileIcon: View {
-    let item: FileItem
-    @State private var loaded: NSImage?
-
-    var body: some View {
-        Image(nsImage: IconCache.cached(key: item.iconKey) ?? loaded ?? IconCache.placeholder(for: item))
-            .resizable()
-            .interpolation(.high)
-            .frame(width: 28, height: 28)
-            .task(id: item.iconKey) {
-                if IconCache.cached(key: item.iconKey) != nil { return }
-                loaded = nil
-                let it = item
-                loaded = await Task.detached(priority: .userInitiated) { IconCache.icon(for: it) }.value
-            }
-    }
-}
-
-/// Yol çubuğundaki klasör simgesi (aynı mantık)
-struct PathIcon: View {
-    let path: String
-    @State private var loaded: NSImage?
-
-    var body: some View {
-        Image(nsImage: IconCache.cached(path: path) ?? loaded ?? IconCache.genericFolder)
-            .resizable()
-            .frame(width: 22, height: 22)
-            .task(id: path) {
-                if IconCache.cached(path: path) != nil { return }
-                loaded = nil
-                let p = path
-                loaded = await Task.detached(priority: .userInitiated) { IconCache.icon(forPath: p) }.value
-            }
     }
 }
 
@@ -320,75 +276,11 @@ func runProcess(_ exe: String, _ args: [String], cwd: URL? = nil) throws -> Proc
 
 // MARK: - Panel modeli
 
-/// Klasör listesi oluşturulurken gereken ayarlar (arka plan iş parçacığına güvenle aktarılır)
-struct ListOptions: Sendable {
-    var showHidden = false
-    var key: SortKey = .created
-    var ascending = false
-}
-
-/// Klasör içeriğini okur ve sıralar. Ana iş parçacığını bloke etmemek için arka planda çağrılır.
-enum DirLoader {
-    static func load(_ url: URL, _ o: ListOptions) throws -> [FileItem] {
-        var keys: [URLResourceKey] = [
-            .isDirectoryKey, .isPackageKey, .isSymbolicLinkKey,
-            .creationDateKey, .contentModificationDateKey, .fileSizeKey
-        ]
-        // Tür açıklaması pahalı bir sorgudur; yalnızca "Tür" sıralaması için okunur.
-        if o.key == .kind { keys.append(.localizedTypeDescriptionKey) }
-        var options: FileManager.DirectoryEnumerationOptions = []
-        if !o.showHidden { options.insert(.skipsHiddenFiles) }
-        let urls = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: options)
-        let keySet = Set(keys)
-        let list: [FileItem] = urls.map { u -> FileItem in
-            let v = try? u.resourceValues(forKeys: keySet)
-            var isDir = v?.isDirectory ?? false
-            if v?.isSymbolicLink == true {
-                isDir = (try? u.resolvingSymlinksInPath().resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            }
-            let isPkg = v?.isPackage ?? false
-            let ext = u.pathExtension.lowercased()
-            let perPath = isDir || isPkg || ext.isEmpty
-            return FileItem(
-                url: u,
-                name: u.lastPathComponent,
-                iconKey: perPath ? "p:" + u.path : "e:" + ext,
-                isDirectory: isDir,
-                isPackage: isPkg,
-                created: v?.creationDate ?? .distantPast,
-                modified: v?.contentModificationDate ?? .distantPast,
-                size: Int64(v?.fileSize ?? 0),
-                kind: v?.localizedTypeDescription ?? ""
-            )
-        }
-        return sort(list, o)
-    }
-
-    static func sort(_ list: [FileItem], _ o: ListOptions) -> [FileItem] {
-        let key = o.key
-        let asc = o.ascending
-        return list.sorted { a, b in
-            let r: ComparisonResult
-            switch key {
-            case .name: r = a.name.localizedStandardCompare(b.name)
-            case .created: r = a.created.compare(b.created)
-            case .modified: r = a.modified.compare(b.modified)
-            case .size: r = a.size < b.size ? .orderedAscending : (a.size > b.size ? .orderedDescending : .orderedSame)
-            case .kind: r = a.kind.localizedStandardCompare(b.kind)
-            }
-            if r == .orderedSame {
-                return a.name.localizedStandardCompare(b.name) == .orderedAscending
-            }
-            return asc ? r == .orderedAscending : r == .orderedDescending
-        }
-    }
-}
-
 @Observable
 final class PaneModel {
     var currentURL: URL
     var items: [FileItem] = [] { didSet { refreshVisible() } }
-    /// Süzgeç ve aramaya göre görünen öğeler (yalnızca ilgili değerler değişince bir kez hesaplanır)
+    /// Süzgeç ve aramaya göre görünen öğeler (her çağrıda yeniden hesaplanmasın diye önbellekli)
     private(set) var visibleItems: [FileItem] = []
     var selection: Set<URL> = [] { didSet { if selection.isEmpty { selectMode = false } } }
     var backStack: [URL] = []
@@ -398,7 +290,13 @@ final class PaneModel {
     /// Resim / Belge / Arşiv süzgeci (klasörler her zaman görünür, böylece gezinilebilir)
     var typeFilter: FileFilter? { didSet { refreshVisible(); pruneSelection() } }
     /// Arama metni: bulunduğu klasörde ada göre anında süzer
-    var query = "" { didSet { refreshVisible(); pruneSelection() } }
+    var query = "" {
+        didSet {
+            guard oldValue != query else { return }
+            refreshVisible()
+            pruneSelection()
+        }
+    }
 
     @ObservationIgnored weak var app: AppModel?
     @ObservationIgnored private var anchor: URL?
@@ -406,10 +304,9 @@ final class PaneModel {
     @ObservationIgnored private var suppressTapUntil = Date.distantPast
     @ObservationIgnored private var lastNavigation = Date.distantPast
     @ObservationIgnored private var watcher: DispatchSourceFileSystemObject?
-    /// Eski (geride kalmış) yükleme sonuçlarını yok saymak için sayaçlar
-    @ObservationIgnored private var navGen = 0
-    @ObservationIgnored private var reloadGen = 0
-    @ObservationIgnored private var pendingReload: Task<Void, Never>?
+    @ObservationIgnored private var navToken = 0
+    @ObservationIgnored private var reloadToken = 0
+    @ObservationIgnored private var reloadWork: DispatchWorkItem?
 
     init(url: URL) {
         currentURL = url.standardizedFileURL
@@ -421,19 +318,20 @@ final class PaneModel {
         typeFilter != nil || !query.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// `visibleItems` önbelleğini yeniler (öğeler, süzgeç ya da arama değişince)
     private func refreshVisible() {
         let q = query.trimmingCharacters(in: .whitespaces)
-        if typeFilter == nil && q.isEmpty {
-            visibleItems = items
-            return
-        }
+        if typeFilter == nil && q.isEmpty { visibleItems = items; return }
+        let qKey = q.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
         let filter = typeFilter
         visibleItems = items.filter { item in
-            if let f = filter, !item.isDirectory || item.isPackage {
+            if let f = filter {
+                // Süzgeç yalnızca açık klasördeki dosyaları gösterir; alt klasörler listeye girmez
+                if item.isDirectory && !item.isPackage { return false }
                 if !f.extensions.contains(item.url.pathExtension.lowercased()) { return false }
             }
-            if !q.isEmpty {
-                return item.name.range(of: q, options: [.caseInsensitive, .diacriticInsensitive], locale: .current) != nil
+            if !qKey.isEmpty {
+                return item.searchKey.contains(qKey)
             }
             return true
         }
@@ -441,16 +339,16 @@ final class PaneModel {
 
     private func pruneSelection() {
         let present = Set(visibleItems.map(\.url))
-        setSelection(selection.intersection(present))
-    }
-
-    /// Değer aynıysa atama yapmaz: @Observable eşit değerde bile görünümleri yeniden çizdirir.
-    private func setSelection(_ s: Set<URL>) {
-        if s != selection { selection = s }
+        let kept = selection.intersection(present)
+        if kept != selection { selection = kept }
     }
 
     /// Klasöre girdikten hemen sonra gelen ikinci tıkı (çift tık) yok sayar.
-    var recentlyNavigated: Bool { Date().timeIntervalSince(lastNavigation) < 0.35 }
+    /// Yalnızca gerçek bir çift tıkın ikinci tıkı yok sayılır; ayrı, bilinçli tıklamalar kaybolmaz.
+    var recentlyNavigated: Bool {
+        guard Date().timeIntervalSince(lastNavigation) < 0.5 else { return false }
+        return (NSApp.currentEvent?.clickCount ?? 1) >= 2
+    }
 
     func start() {
         navigate(to: currentURL, record: false)
@@ -458,33 +356,39 @@ final class PaneModel {
 
     // Gezinme
 
-    /// Klasörü arka planda okur; bitince listeyi değiştirir (arayüz takılmaz).
-    /// Art arda gelen isteklerde yalnızca en sonuncusu uygulanır.
-    func navigate(to url: URL, record: Bool = true) {
+    /// Klasörü arka planda okuyup sıralar; ana iş parçacığı (tıklama/animasyon) hiç bloke olmaz.
+    /// Yeni bir gezinme başlarsa eskisinin sonucu atılır. `then`, liste uygulandıktan sonra çalışır.
+    func navigate(to url: URL, record: Bool = true, then: (() -> Void)? = nil) {
         let target = url.standardizedFileURL
-        let opts = app?.listOptions ?? ListOptions()
-        navGen &+= 1
-        reloadGen &+= 1
-        let gen = navGen
-        lastNavigation = Date()
-        Task { @MainActor [weak self] in
-            let result: Result<[FileItem], Error> = await Task.detached(priority: .userInitiated) {
-                Result(catching: { try DirLoader.load(target, opts) })
-            }.value
-            guard let self, gen == self.navGen else { return }
-            switch result {
-            case .failure:
-                self.app?.showToast("“\(Places.title(for: target))” açılamadı. Erişim izni gerekebilir (Sistem Ayarları › Gizlilik ve Güvenlik).")
-            case .success(let list):
-                if record, target.normPath != self.currentURL.normPath {
-                    self.backStack.append(self.currentURL)
+        let hidden = app?.showHidden == true
+        let key = app?.sortKey ?? .created
+        let asc = app?.ascending ?? false
+        navToken += 1
+        let token = navToken
+        lastNavigation = Date()      // çift tıkın ikinci tıkı yok sayılsın
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = Result<[FileItem], Error> {
+                let list = try PaneModel.fetch(target, showHidden: hidden, withKind: key == .kind)
+                return PaneModel.sort(list, key: key, ascending: asc)
+            }
+            await MainActor.run {
+                guard let self, token == self.navToken else { return }
+                switch result {
+                case .failure:
+                    self.app?.showToast("“\(Places.title(for: target))” açılamadı. Erişim izni gerekebilir (Sistem Ayarları › Gizlilik ve Güvenlik).")
+                case .success(let list):
+                    if record, target.normPath != self.currentURL.normPath {
+                        self.backStack.append(self.currentURL)
+                    }
+                    self.currentURL = target
+                    self.items = list
+                    if !self.selection.isEmpty { self.selection = [] }
+                    self.anchor = nil
+                    self.lastNavigation = Date()
+                    self.reloadToken += 1          // eski klasör için bekleyen yenilemeleri geçersiz kıl
+                    self.startWatching()
+                    then?()
                 }
-                self.currentURL = target
-                self.items = list
-                self.setSelection([])
-                self.anchor = nil
-                self.lastNavigation = Date()
-                self.startWatching()
             }
         }
     }
@@ -499,31 +403,87 @@ final class PaneModel {
         navigate(to: currentURL.deletingLastPathComponent())
     }
 
+    /// Arama kutusuna yapıştırılan dosya/klasör yolunu açar.
+    /// Klasörse içine girer; dosya (ya da .app gibi paket) ise bulunduğu klasörü açıp öğeyi seçer.
+    /// Metin bir yol gibi görünmüyorsa false döner (normal arama olarak kalır).
+    @discardableResult
+    func openPath(_ raw: String) -> Bool {
+        var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        // Tırnak içine alınmış yol ("…" ya da '…')
+        if t.count >= 2, let f = t.first, let l = t.last, (f == "\"" && l == "\"") || (f == "'" && l == "'") {
+            t = String(t.dropFirst().dropLast())
+        }
+        if t.hasPrefix("file://"), let u = URL(string: t), u.isFileURL {
+            t = u.path
+        } else {
+            t = t.replacingOccurrences(of: "\\ ", with: " ")     // Terminal tarzı kaçışlı boşluk
+        }
+        guard t.hasPrefix("/") || t.hasPrefix("~") else { return false }
+        let path = (t as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+            app?.showToast("Yol bulunamadı: \(url.path)")
+            return true
+        }
+        query = ""
+        let isPackage = (try? url.resourceValues(forKeys: [.isPackageKey]).isPackage) ?? false
+        if isDir.boolValue && !isPackage {
+            navigate(to: url)
+        } else {
+            typeFilter = nil
+            navigate(to: url.deletingLastPathComponent()) { [weak self] in
+                guard let self,
+                      let match = self.items.first(where: { $0.url.normPath == url.normPath }) else { return }
+                self.selection = [match.url]
+                self.anchor = match.url
+            }
+        }
+        return true
+    }
+
+    /// Geçerli klasörü arka planda yeniden okur (seçim korunur).
     func reload() {
-        reloadGen &+= 1
-        let gen = reloadGen
-        let url = currentURL
-        let opts = app?.listOptions ?? ListOptions()
-        Task { @MainActor [weak self] in
-            let result: Result<[FileItem], Error> = await Task.detached(priority: .userInitiated) {
-                Result(catching: { try DirLoader.load(url, opts) })
-            }.value
-            guard let self, gen == self.reloadGen else { return }
-            switch result {
-            case .success(let list):
-                // Değişiklik yoksa hiçbir şeyi yeniden çizdirme
-                if list != self.items { self.items = list }
-                let present = Set(list.map(\.url))
-                self.setSelection(self.selection.intersection(present))
-            case .failure:
-                // Klasör silindiyse bir üst klasöre çık
-                if self.currentURL.normPath != "/" {
-                    self.navigate(to: url.deletingLastPathComponent(), record: false)
-                } else {
-                    self.items = []
+        let target = currentURL
+        let hidden = app?.showHidden == true
+        let key = app?.sortKey ?? .created
+        let asc = app?.ascending ?? false
+        reloadToken += 1
+        let token = reloadToken
+        let navAtStart = navToken
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let result = Result<[FileItem], Error> {
+                let list = try PaneModel.fetch(target, showHidden: hidden, withKind: key == .kind)
+                return PaneModel.sort(list, key: key, ascending: asc)
+            }
+            await MainActor.run {
+                // Bu sırada başka bir klasöre geçildiyse sonuç eskidir
+                guard let self, token == self.reloadToken, navAtStart == self.navToken else { return }
+                switch result {
+                case .success(let list):
+                    if list != self.items { self.items = list }     // değişmediyse arayüzü uyandırma
+                    let present = Set(list.map(\.url))
+                    let kept = self.selection.intersection(present)
+                    if kept != self.selection { self.selection = kept }
+                case .failure:
+                    // Klasör silindiyse bir üst klasöre çık
+                    if self.currentURL.normPath != "/" {
+                        self.navigate(to: self.currentURL.deletingLastPathComponent(), record: false)
+                    } else {
+                        self.items = []
+                    }
                 }
             }
         }
+    }
+
+    /// Sıralama ölçütü değişince diskten tekrar okumadan bellekteki listeyi yeniden sıralar.
+    func resort() {
+        let key = app?.sortKey ?? .created
+        // "Tür" bilgisi yalnızca o ölçüt seçiliyken okunur; eksikse diskten yükle
+        if key == .kind, items.contains(where: { $0.kind.isEmpty }) { reload(); return }
+        items = PaneModel.sort(items, key: key, ascending: app?.ascending ?? false)
     }
 
     // Seçim
@@ -537,11 +497,11 @@ final class PaneModel {
                   case let list = visibleItems,
                   let i = list.firstIndex(where: { $0.url == a }),
                   let j = list.firstIndex(where: { $0.url == item.url }) {
-            setSelection(Set(list[min(i, j)...max(i, j)].map(\.url)))
+            selection = Set(list[min(i, j)...max(i, j)].map(\.url))
         } else if item.isEnterable {
             navigate(to: item.url)               // tek tıkla klasöre gir
         } else {
-            setSelection([item.url])
+            selection = [item.url]
             anchor = item.url
         }
     }
@@ -558,20 +518,20 @@ final class PaneModel {
         if dragBase == nil {
             dragBase = selection
             anchor = item.url
-            if !selectMode { selectMode = true }
-            setSelection(dragBase!.union([item.url]))
+            selectMode = true
+            selection = dragBase!.union([item.url])
         }
         guard let y else { return }
         let cur = max(0, min(list.count - 1, Int(y / rowHeight)))
         let range = list[min(start, cur)...max(start, cur)].map(\.url)
-        setSelection((dragBase ?? []).union(range))
-        if !selectMode { selectMode = true }
+        selection = (dragBase ?? []).union(range)
+        selectMode = true
     }
 
     /// Herhangi bir tıklama çoklu seçim modunu bitirir (seçili öğeler kalır)
     func endSelectMode() {
         dragBase = nil
-        if selectMode { selectMode = false }
+        selectMode = false
     }
 
     /// Fare bırakıldığında sürükle-seç yarım kaldıysa bitir
@@ -581,7 +541,7 @@ final class PaneModel {
 
     func endDragSelect() {
         dragBase = nil
-        suppressTapUntil = Date().addingTimeInterval(0.3)
+        suppressTapUntil = Date().addingTimeInterval(0.12)
     }
 
     func ensureSelected(_ item: FileItem) {
@@ -592,6 +552,65 @@ final class PaneModel {
     }
 
     // İç işler
+
+    /// Arka plan iş parçacığında çalışır (durum okumaz). `localizedTypeDescription` her dosya
+    /// için pahalıdır, bu yüzden yalnızca "Tür" ölçütüyle sıralarken okunur.
+    private static func fetch(_ url: URL, showHidden: Bool, withKind: Bool) throws -> [FileItem] {
+        var keys: [URLResourceKey] = [
+            .isDirectoryKey, .isPackageKey, .isSymbolicLinkKey,
+            .creationDateKey, .contentModificationDateKey,
+            .fileSizeKey
+        ]
+        if withKind { keys.append(.localizedTypeDescriptionKey) }
+        var options: FileManager.DirectoryEnumerationOptions = []
+        if !showHidden { options.insert(.skipsHiddenFiles) }
+        let urls = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: options)
+        let keySet = Set(keys)
+        return urls.map { u in
+            let v = try? u.resourceValues(forKeys: keySet)
+            var isDir = v?.isDirectory ?? false
+            if v?.isSymbolicLink == true {
+                isDir = (try? u.resolvingSymlinksInPath().resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            }
+            return FileItem(
+                url: u,
+                isDirectory: isDir,
+                isPackage: v?.isPackage ?? false,
+                created: v?.creationDate ?? .distantPast,
+                modified: v?.contentModificationDate ?? .distantPast,
+                size: Int64(v?.fileSize ?? 0),
+                kind: v?.localizedTypeDescription ?? "",
+                searchKey: u.lastPathComponent.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            )
+        }
+    }
+
+    private static func sort(_ list: [FileItem], key: SortKey, ascending asc: Bool) -> [FileItem] {
+        list.sorted { a, b in
+            let r: ComparisonResult
+            switch key {
+            case .name: r = a.name.localizedStandardCompare(b.name)
+            case .created: r = a.created.compare(b.created)
+            case .modified: r = a.modified.compare(b.modified)
+            case .size: r = a.size < b.size ? .orderedAscending : (a.size > b.size ? .orderedDescending : .orderedSame)
+            case .kind: r = a.kind.localizedStandardCompare(b.kind)
+            }
+            if r == .orderedSame {
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            }
+            return asc ? r == .orderedAscending : r == .orderedDescending
+        }
+    }
+
+    /// Kopyalama gibi işlemlerde art arda gelen olayları tek bir yenilemede toplar.
+    private func scheduleReload() {
+        reloadWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.reload() }
+        }
+        reloadWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+    }
 
     /// Klasörde değişiklik olunca listeyi otomatik yeniler.
     private func startWatching() {
@@ -611,16 +630,39 @@ final class PaneModel {
         source.resume()
         watcher = source
     }
+}
 
-    /// Olay sağanağını (ör. süren bir indirme) en fazla ~5 yenilemeye/sn indirger.
-    private func scheduleReload() {
-        guard pendingReload == nil else { return }
-        pendingReload = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(200))
-            guard let self else { return }
-            self.pendingReload = nil
-            self.reload()
+// MARK: - Silme geçmişi (Silme Geri için)
+
+struct TrashedItem {
+    let original: URL
+    let trashed: URL
+}
+
+/// Çöp Kutusu'na atılan öğelerin yığını; ana pencere ve Galeri aynı kaydı kullanır.
+enum TrashLog {
+    static var batches: [[TrashedItem]] = []
+
+    /// URL'leri onay sormadan Çöp Kutusu'na atar ve tek bir silme eylemi olarak kaydeder.
+    @discardableResult
+    static func trash(_ urls: [URL]) -> (done: Int, error: Error?) {
+        var items: [TrashedItem] = []
+        var lastError: Error?
+        for u in urls {
+            do {
+                var result: NSURL?
+                try FileManager.default.trashItem(at: u, resultingItemURL: &result)
+                if let r = result as URL? { items.append(TrashedItem(original: u, trashed: r)) }
+                else { items.append(TrashedItem(original: u, trashed: u)) }
+            } catch {
+                lastError = error
+            }
         }
+        if !items.isEmpty {
+            batches.append(items)
+            if batches.count > 2 { batches.removeFirst() }
+        }
+        return (items.count, lastError)
     }
 }
 
@@ -630,65 +672,46 @@ enum Gallery {
     static var win: NSWindow?
     static let exts = ["jpg", "jpeg", "png", "heic", "gif", "tiff", "bmp", "webp"]
 
-    /// Çözülmüş (piksel boyutlu) tam boy resimler; komşu resimler önceden buraya yüklenir
-    static let cache: NSCache<NSURL, NSImage> = {
-        let c = NSCache<NSURL, NSImage>()
-        c.totalCostLimit = 400_000_000
-        return c
-    }()
-    static let thumbCache: NSCache<NSURL, NSImage> = {
-        let c = NSCache<NSURL, NSImage>()
-        c.countLimit = 600
-        return c
-    }()
-
     static func isImage(_ u: URL) -> Bool { exts.contains(u.pathExtension.lowercased()) }
 
-    /// ImageIO ile çözer (yön bilgisi uygulanır). `maxPixel` nil ise tam çözünürlük.
-    /// Çözümleme burada yapıldığı için ana iş parçacığında çizim sırasında takılma olmaz.
-    static func decode(_ u: URL, maxPixel: Int?) -> CGImage? {
-        guard let src = CGImageSourceCreateWithURL(u as CFURL, nil) else { return nil }
-        var limit = maxPixel ?? 0
-        if maxPixel == nil {
-            guard let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
-                  let w = p[kCGImagePropertyPixelWidth] as? Int,
-                  let h = p[kCGImagePropertyPixelHeight] as? Int else { return nil }
-            limit = max(w, h)
+    /// Resmi piksel boyutunda yükler (kırpma ve kaydetmede çözünürlük kaybolmasın)
+    /// ImageIO ile çözer: EXIF yönü uygulanır, çözme işlemi hemen (çağıran iş parçacığında) yapılır,
+    /// böylece ekrana çizerken ana iş parçacığında takılma olmaz. Herhangi bir iş parçacığından çağrılabilir.
+    static func load(_ u: URL) -> NSImage? {
+        if let src = CGImageSourceCreateWithURL(u as CFURL, nil),
+           let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+           let w = props[kCGImagePropertyPixelWidth] as? Int,
+           let h = props[kCGImagePropertyPixelHeight] as? Int, max(w, h) > 0 {
+            let opts: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(w, h)
+            ]
+            if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) {
+                return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+            }
         }
-        guard limit > 0 else { return nil }
+        guard let m = NSImage(contentsOf: u) else { return nil }
+        if let r = m.representations.first, r.pixelsWide > 0 { m.size = NSSize(width: r.pixelsWide, height: r.pixelsHigh) }
+        return m
+    }
+
+    static func loadAsync(_ u: URL) async -> NSImage? {
+        await Task.detached(priority: .userInitiated) { load(u) }.value
+    }
+
+    /// Şerit için küçük önizleme (tam boyutlu resmi çözmeden)
+    static func thumbnail(_ u: URL, maxPixel: Int = 200) -> NSImage? {
+        guard let src = CGImageSourceCreateWithURL(u as CFURL, nil) else { return nil }
         let opts: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: limit
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel
         ]
-        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
-    }
-
-    /// Resmi piksel boyutunda yükler (kırpma ve kaydetmede çözünürlük kaybolmasın).
-    /// Arka plan iş parçacığında çağrılmalıdır.
-    static func load(_ u: URL) -> NSImage? {
-        if let c = cache.object(forKey: u as NSURL) { return c }
-        let m: NSImage
-        if let cg = decode(u, maxPixel: nil) {
-            m = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-        } else if let old = NSImage(contentsOf: u) {
-            if let r = old.representations.first, r.pixelsWide > 0 { old.size = NSSize(width: r.pixelsWide, height: r.pixelsHigh) }
-            m = old
-        } else {
-            return nil
-        }
-        cache.setObject(m, forKey: u as NSURL, cost: Int(m.size.width * m.size.height * 4))
-        return m
-    }
-
-    /// Küçük resim (arka plan iş parçacığında çağrılmalıdır)
-    static func thumbnail(_ u: URL) -> NSImage? {
-        if let c = thumbCache.object(forKey: u as NSURL) { return c }
-        guard let cg = decode(u, maxPixel: 200) else { return nil }
-        let m = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-        thumbCache.setObject(m, forKey: u as NSURL)
-        return m
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 
     static func siblings(of u: URL) -> [URL] {
@@ -700,8 +723,6 @@ enum Gallery {
     /// Dosyayı açar: resimse galeride, değilse sistemin varsayılan uygulamasında.
     static func open(_ u: URL) {
         guard isImage(u) else { NSWorkspace.shared.open(u); return }
-        cache.removeAllObjects()          // dosya dışarıdan değişmiş olabilir
-        thumbCache.removeAllObjects()
         let v = NSHostingView(rootView: GalleryView(start: u))
         if let w = win { w.contentView = v; w.makeKeyAndOrderFront(nil); return }
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
@@ -714,26 +735,27 @@ enum Gallery {
         win = w
     }
 
-    /// Döndürme / çevirme: sonucu bir kez piksellere işler. (Çizim bloklu NSImage her çizimde
-    /// yeniden hesaplanır ve tam çözünürlükte ana iş parçacığını yorar.)
-    static func xform(_ m: NSImage, _ size: NSSize, _ t: (NSAffineTransform) -> Void) -> NSImage {
-        guard let cg = m.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return m }
-        let w = Int(size.width.rounded()), h = Int(size.height.rounded())
-        guard w > 0, h > 0 else { return m }
-        var made: CGContext?
-        for space in [cg.colorSpace, CGColorSpace(name: CGColorSpace.sRGB)].compactMap({ $0 }) {
-            made = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                             space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            if made != nil { break }
+    /// Döndür/çevir sonucunu hemen bir bitmap'e çizer. (Çizim bloklu NSImage her yeniden
+    /// çizimde — örn. kırpma sürüklenirken — tam çözünürlüklü resmi baştan çizerdi.)
+    static func xform(_ m: NSImage, _ size: NSSize, _ t: @escaping (NSAffineTransform) -> Void) -> NSImage {
+        if let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+                                      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+           let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+            rep.size = size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = ctx
+            let a = NSAffineTransform(); t(a); a.concat()
+            m.draw(at: .zero, from: .zero, operation: .copy, fraction: 1)
+            NSGraphicsContext.restoreGraphicsState()
+            let out = NSImage(size: size)
+            out.addRepresentation(rep)
+            return out
         }
-        guard let ctx = made else { return m }
-        let a = NSAffineTransform(); t(a)
-        let s = a.transformStruct
-        ctx.concatenate(CGAffineTransform(a: s.m11, b: s.m12, c: s.m21, d: s.m22, tx: s.tX, ty: s.tY))
-        ctx.interpolationQuality = .high
-        ctx.draw(cg, in: CGRect(origin: .zero, size: m.size))
-        guard let out = ctx.makeImage() else { return m }
-        return NSImage(cgImage: out, size: NSSize(width: w, height: h))
+        return NSImage(size: size, flipped: false) { _ in
+            let a = NSAffineTransform(); t(a); a.concat()
+            m.draw(at: .zero, from: .zero, operation: .copy, fraction: 1); return true
+        }
     }
 }
 
@@ -757,6 +779,19 @@ struct GalleryView: View {
         let fs = Gallery.siblings(of: start)
         _files = State(initialValue: fs)
         _i = State(initialValue: fs.firstIndex(of: start) ?? 0)
+        // Resim görünüm açıldıktan sonra arka planda yüklenir (.task içinde loadCurrent)
+    }
+
+    /// Geçerli resmi arka planda yükler; yenisi istenirse eskisi iptal olur, yüklenirken eski resim görünür kalır.
+    func loadCurrent() {
+        loadTask?.cancel()
+        guard files.indices.contains(i) else { img = nil; return }
+        let u = files[i]
+        loadTask = Task { @MainActor in
+            let m = await Gallery.loadAsync(u)
+            if Task.isCancelled { return }
+            img = m
+        }
     }
 
     func btn(_ s: String, _ on: Bool = false, _ f: @escaping () -> Void) -> some View {
@@ -768,39 +803,14 @@ struct GalleryView: View {
 
     func go(_ d: Int) {
         guard !files.isEmpty else { return }
-        show((i + d + files.count) % files.count)
-    }
-
-    /// n. resme geçer. Çözümleme arka planda yapılır; yüklenirken önceki resim ekranda kalır.
-    func show(_ n: Int) {
-        guard files.indices.contains(n) else { loadTask?.cancel(); img = nil; return }
         crop = false; cn = Self.defCn
-        i = n
-        let u = files[n]
-        loadTask?.cancel()
-        if let c = Gallery.cache.object(forKey: u as NSURL) {
-            img = c
-        } else {
-            loadTask = Task { @MainActor in
-                let m = await Task.detached(priority: .userInitiated) { Gallery.load(u) }.value
-                guard !Task.isCancelled, files.indices.contains(i), files[i] == u else { return }
-                img = m
-            }
-        }
-        // Komşu resimleri önceden yükle: ileri/geri geçiş anında olur
-        let count = files.count
-        if count > 1 {
-            let neighbors = [files[(n + 1) % count], files[(n - 1 + count) % count]]
-            Task.detached(priority: .utility) {
-                for v in neighbors { _ = Gallery.load(v) }
-            }
-        }
+        i = (i + d + files.count) % files.count; loadCurrent()
     }
 
     func open() {
         let p = NSOpenPanel(); p.allowedContentTypes = [.image]
         guard p.runModal() == .OK, let u = p.url else { return }
-        files = Gallery.siblings(of: u); show(files.firstIndex(of: u) ?? 0)
+        crop = false; files = Gallery.siblings(of: u); i = files.firstIndex(of: u) ?? 0; loadCurrent()
     }
 
     func rot(_ d: CGFloat) {
@@ -816,9 +826,9 @@ struct GalleryView: View {
     func del() {
         guard !files.isEmpty else { return }
         crop = false
-        try? FileManager.default.trashItem(at: files[i], resultingItemURL: nil)
+        guard TrashLog.trash([files[i]]).done == 1 else { return }   // onay sormadan doğrudan Çöp Kutusu'na
         files.remove(at: i)
-        if files.isEmpty { loadTask?.cancel(); img = nil; i = 0 } else { show(min(i, files.count - 1)) }
+        if files.isEmpty { loadTask?.cancel(); img = nil; i = 0 } else { i = min(i, files.count - 1); loadCurrent() }
     }
 
     /// Seçili alanı "ad kopya.uzantı" olarak aynı klasöre kaydeder
@@ -936,7 +946,7 @@ struct GalleryView: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: 14) {
                     ForEach(files.indices, id: \.self) { n in
-                        Button { show(n) } label: {
+                        Button { crop = false; i = n; loadCurrent() } label: {
                             GalleryThumb(url: files[n]).frame(width: 80, height: 80)
                                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(n == i ? Color.blue : .clear, lineWidth: 3))
                         }.buttonStyle(.plain)
@@ -947,28 +957,31 @@ struct GalleryView: View {
         .background(Color(red: 0.09, green: 0.1, blue: 0.11))
         .focusable().focused($foc).focusEffectDisabled()
         .onAppear { foc = true }
-        .task { show(i) }
+        .task { loadCurrent() }
         .onReceive(tick) { _ in if play { go(1) } }
         .onKeyPress(.leftArrow) { go(-1); return .handled }
         .onKeyPress(.rightArrow) { go(1); return .handled }
         .onKeyPress(.upArrow) { rot(90); return .handled }      // yukarı: sola döndür
         .onKeyPress(.downArrow) { rot(-90); return .handled }   // aşağı: sağa döndür
-        .onKeyPress(keys: [.delete, .deleteForward]) { _ in del(); return .handled }
         .onKeyPress(.return) { if crop { saveCrop(); return .handled }; return .ignored }
         .onKeyPress(.escape) { if crop { crop = false; return .handled }; return .ignored }
     }
+}
+
+enum ThumbCache {
+    static let cache = NSCache<NSURL, NSImage>()
 }
 
 struct GalleryThumb: View {
     let url: URL
     @State var t: NSImage?
     var body: some View {
-        let shown = t ?? Gallery.thumbCache.object(forKey: url as NSURL)
-        Group { if let shown { Image(nsImage: shown).resizable().scaledToFit() } else { Color.clear } }
+        Group { if let t { Image(nsImage: t).resizable().scaledToFit() } else { Color.clear } }
             .task(id: url) {
-                if Gallery.thumbCache.object(forKey: url as NSURL) != nil { return }
-                let u = url
-                t = await Task.detached(priority: .utility) { Gallery.thumbnail(u) }.value
+                if let c = ThumbCache.cache.object(forKey: url as NSURL) { t = c; return }
+                let m = await Task.detached(priority: .utility) { Gallery.thumbnail(url) }.value
+                if let m { ThumbCache.cache.setObject(m, forKey: url as NSURL) }
+                t = m
             }
     }
 }
@@ -987,13 +1000,11 @@ final class AppModel {
     var showHidden = false
 
     var bookmarks: [URL]
-    var hiddenButtons: Set<String>
 
     var toast: String?
     var showPrompt = false
     var prompt: PromptKind = .newFolder
     var promptText = ""
-    var showCustomize = false
 
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var selMonitor: Any?
@@ -1007,6 +1018,12 @@ final class AppModel {
                 if e.type == .leftMouseUp {
                     self.left.finishDragIfNeeded(); self.right.finishDragIfNeeded()
                 } else {
+                    // Yazı kutusunun dışına tıklanınca yazma modu kapanır
+                    if let w = e.window, w !== Gallery.win, w.attachedSheet == nil,
+                       let ed = w.firstResponder as? NSTextView, let field = ed.delegate as? NSView {
+                        let p = field.convert(e.locationInWindow, from: nil)
+                        if !field.bounds.contains(p) { w.makeFirstResponder(nil) }
+                    }
                     self.left.endSelectMode(); self.right.endSelectMode()
                 }
             }
@@ -1026,20 +1043,10 @@ final class AppModel {
         }
         let saved = UserDefaults.standard.stringArray(forKey: "bookmarks")
         bookmarks = saved?.map { URL(fileURLWithPath: $0) } ?? []
-        hiddenButtons = Set(UserDefaults.standard.stringArray(forKey: "hiddenButtons") ?? [])
         left.app = self
         right.app = self
         left.start()
         right.start()
-    }
-
-    /// Etkin paneli değiştirir; zaten etkinse hiçbir şey yapmaz (gereksiz yeniden çizimi önler).
-    func activate(_ side: Side) {
-        if activeSide != side { activeSide = side }
-    }
-
-    var listOptions: ListOptions {
-        ListOptions(showHidden: showHidden, key: sortKey, ascending: ascending)
     }
 
     var active: PaneModel { activeSide == .left ? left : right }
@@ -1048,6 +1055,18 @@ final class AppModel {
     func reloadAll() {
         left.reload()
         right.reload()
+    }
+
+    /// Sıralama değişince diskten okumadan bellekte yeniden sıralar.
+    func resortAll() {
+        left.resort()
+        right.resort()
+    }
+
+    /// Aynı panel zaten etkinse atama yapmaz: @Observable her atamada (değer aynı olsa da)
+    /// bağımlı tüm görünümleri yeniden hesaplatır.
+    func activate(_ side: Side) {
+        if activeSide != side { activeSide = side }
     }
 
     // MARK: Bildirim
@@ -1067,7 +1086,7 @@ final class AppModel {
         guard key != sortKey else { return }
         sortKey = key
         ascending = (key == .name || key == .kind)
-        reloadAll()
+        resortAll()
     }
 
     func toggleSort(_ key: SortKey) {
@@ -1077,7 +1096,7 @@ final class AppModel {
             sortKey = key
             ascending = (key == .name || key == .kind)
         }
-        reloadAll()
+        resortAll()
     }
 
     func toggleSortDate() {
@@ -1087,12 +1106,12 @@ final class AppModel {
             sortKey = .created
             ascending = false
         }
-        reloadAll()
+        resortAll()
     }
 
     func setAscending(_ value: Bool) {
         ascending = value
-        reloadAll()
+        resortAll()
     }
 
     func toggleHidden() {
@@ -1139,11 +1158,6 @@ final class AppModel {
 
     private func saveBookmarks() {
         UserDefaults.standard.set(bookmarks.map(\.path), forKey: "bookmarks")
-    }
-
-    func setButton(_ b: ActionButton, visible: Bool) {
-        if visible { hiddenButtons.remove(b.rawValue) } else { hiddenButtons.insert(b.rawValue) }
-        UserDefaults.standard.set(Array(hiddenButtons), forKey: "hiddenButtons")
     }
 
     // MARK: İşlemler
@@ -1258,22 +1272,46 @@ final class AppModel {
 
     func trashSelected() {
         guard let items = requireSelection() else { return }
-        var done = 0
-        var lastError: Error?
-        for item in items {
-            do {
-                try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
-                done += 1
-            } catch {
-                lastError = error
-            }
-        }
+        let r = TrashLog.trash(items.map(\.url))
         active.selection = []
         reloadAll()
-        if let e = lastError, done == 0 {
+        if let e = r.error, r.done == 0 {
             showToast("Silinemedi: \(e.localizedDescription)")
         } else {
-            showToast("\(done) öğe Çöp Kutusu'na taşındı.")
+            showToast("\(r.done) öğe Çöp Kutusu'na taşındı.")
+        }
+    }
+
+    /// Son silme eylemini geri alır: öğeleri Çöp Kutusu'ndan özgün yerlerine taşır.
+    func undoDelete() {
+        guard let batch = TrashLog.batches.popLast() else {
+            showToast("Geri alınacak bir silme işlemi yok.")
+            return
+        }
+        let fm = FileManager.default
+        var restored: [URL] = []
+        var left: [TrashedItem] = []
+        for it in batch {
+            guard fm.fileExists(atPath: it.trashed.path) else { continue }   // Çöp boşaltılmış olabilir
+            let dir = it.original.deletingLastPathComponent()
+            let isDir = (try? it.trashed.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let dest = fm.fileExists(atPath: it.original.path)
+                ? AppModel.uniqueURL(for: it.original, isDir: isDir, in: dir)
+                : it.original
+            do {
+                try fm.moveItem(at: it.trashed, to: dest)
+                restored.append(dest)
+            } catch {
+                left.append(it)
+            }
+        }
+        if !left.isEmpty { TrashLog.batches.append(left) }
+        reloadAll()
+        if restored.isEmpty {
+            showToast("Silme geri alınamadı (öğe Çöp Kutusu'nda bulunamadı).")
+        } else {
+            active.selection = Set(restored)
+            showToast("\(restored.count) öğe geri getirildi.")
         }
     }
 
@@ -1431,15 +1469,19 @@ struct ContentView: View {
                 CenterColumn().frame(width: 196)
                 PaneView(pane: app.right, side: .right)
             }
+            PathBar()
         }
         .background(Theme.background)
         .preferredColorScheme(.dark)
+        .onAppear {
+            // Açılışta arama kutusu kendiliğinden odak almasın
+            DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) }
+        }
         .alert(model.promptTitle, isPresented: $model.showPrompt) {
             TextField("Ad", text: $model.promptText)
             Button("Tamam") { app.confirmPrompt() }
             Button("İptal", role: .cancel) {}
         }
-        .sheet(isPresented: $model.showCustomize) { CustomizeSheet() }
         .overlay(alignment: .bottom) {
             if let t = app.toast {
                 Text(t)
@@ -1535,7 +1577,6 @@ struct PaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            BreadcrumbBar(pane: pane, side: side)
             ColumnHeader()
             FileList(pane: pane, side: side)
         }
@@ -1594,17 +1635,17 @@ struct ClickTracker: NSViewRepresentable {
     }
 }
 
-struct BreadcrumbBar: View {
-    let pane: PaneModel
-    let side: Side
+/// Alttaki tek yol çubuğu: etkin (işaretli) panelde hangi klasör açıksa onun yolunu gösterir.
+/// Yoldaki bir parçaya tıklamak etkin paneli o konuma götürür.
+struct PathBar: View {
     @Environment(AppModel.self) var app
 
     var crumbs: [(name: String, url: URL)] {
         var result: [(name: String, url: URL)] = []
-        var url = pane.currentURL.standardizedFileURL
+        var url = app.active.currentURL.standardizedFileURL
         while true {
             let isRoot = url.path == "/"
-            let name = isRoot ? Places.rootName : url.lastPathComponent
+            let name = isRoot ? FileManager.default.displayName(atPath: "/") : url.lastPathComponent
             result.insert((name: name, url: url), at: 0)
             if isRoot { break }
             url = url.deletingLastPathComponent()
@@ -1613,23 +1654,28 @@ struct BreadcrumbBar: View {
     }
 
     var body: some View {
+        let pane = app.active
         let list = crumbs
-        HStack(spacing: 8) {
-            Button { app.activate(side); pane.goBack() } label: {
+        HStack(spacing: 6) {
+            Button { pane.goBack() } label: {
                 Image(systemName: "chevron.backward")
+                    .frame(width: 30, height: 34)
+                    .contentShape(Rectangle())
             }
             .disabled(pane.backStack.isEmpty)
             .help("Geri")
 
-            Button { app.activate(side); pane.goUp() } label: {
+            Button { pane.goUp() } label: {
                 Image(systemName: "arrow.up")
+                    .frame(width: 30, height: 34)
+                    .contentShape(Rectangle())
             }
             .disabled(pane.currentURL.normPath == "/")
             .help("Üst klasör")
 
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 2) {
                         ForEach(Array(list.enumerated()), id: \.offset) { i, c in
                             if i > 0 {
                                 Image(systemName: "chevron.right")
@@ -1637,7 +1683,6 @@ struct BreadcrumbBar: View {
                                     .foregroundStyle(.secondary)
                             }
                             Button {
-                                app.activate(side)
                                 pane.navigate(to: c.url)
                             } label: {
                                 HStack(spacing: 6) {
@@ -1646,21 +1691,29 @@ struct BreadcrumbBar: View {
                                             .font(.system(size: 17))
                                             .foregroundStyle(.secondary)
                                     } else {
-                                        PathIcon(path: c.url.path)
+                                        Image(nsImage: IconCache.icon(forPath: c.url.path))
+                                            .resizable()
+                                            .frame(width: 22, height: 22)
                                     }
                                     Text(c.name)
                                         .font(.system(size: 16))
                                         .foregroundStyle(.white.opacity(0.92))
                                         .lineLimit(1)
                                 }
+                                .padding(.horizontal, 6)
+                                .frame(height: 34)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .id(i)
                         }
                     }
                 }
-                .onChange(of: pane.currentURL) {
+                .onChange(of: app.active.currentURL) {
                     proxy.scrollTo(list.count - 1, anchor: .trailing)
+                }
+                .onChange(of: app.activeSide) {
+                    proxy.scrollTo(crumbs.count - 1, anchor: .trailing)
                 }
                 .onAppear {
                     proxy.scrollTo(list.count - 1, anchor: .trailing)
@@ -1668,12 +1721,12 @@ struct BreadcrumbBar: View {
             }
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, 12)
-        .frame(height: 46)
+        .padding(.horizontal, 10)
+        .frame(height: 44)
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.bar))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(app.activeSide == side ? Theme.accent.opacity(0.85) : Color.clear, lineWidth: 1.5)
+                .stroke(Theme.accent.opacity(0.85), lineWidth: 1.5)
                 .allowsHitTesting(false)
         )
         .padding(8)
@@ -1719,10 +1772,9 @@ struct FileList: View {
     let side: Side
 
     var body: some View {
-        let list = pane.visibleItems
         ScrollView {
             LazyVStack(spacing: 0) {
-                ForEach(Array(list.enumerated()), id: \.element.id) { i, item in
+                ForEach(Array(pane.visibleItems.enumerated()), id: \.element.id) { i, item in
                     FileRow(pane: pane, side: side, item: item, striped: i % 2 == 1)
                 }
             }
@@ -1730,7 +1782,7 @@ struct FileList: View {
         }
         .id(pane.currentURL)
         .overlay {
-            if list.isEmpty {
+            if pane.visibleItems.isEmpty {
                 Text(pane.isFiltering && !pane.items.isEmpty ? "Sonuç bulunamadı" : "Bu klasör boş")
                     .font(.system(size: 15))
                     .foregroundStyle(.secondary)
@@ -1752,7 +1804,10 @@ struct FileRow: View {
     var body: some View {
         let date = app.sortKey == .modified ? item.modified : item.created
         HStack(spacing: 12) {
-            FileIcon(item: item)
+            Image(nsImage: IconCache.icon(for: item))
+                .resizable()
+                .interpolation(.high)
+                .frame(width: 28, height: 28)
             Text(item.name)
                 .font(.system(size: 16))
                 .lineLimit(1)
@@ -1771,7 +1826,7 @@ struct FileRow: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { doubleClick() })
         .simultaneousGesture(TapGesture().onEnded { singleClick() })
         .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.4)
+            LongPressGesture(minimumDuration: 0.6, maximumDistance: 6)
                 .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named("fileList")))
                 .onChanged { value in
                     switch value {
@@ -1797,8 +1852,6 @@ struct FileRow: View {
             Button("Kopyasını oluştur") { prepare(); app.duplicateSelected() }
             Button("ZIP oluştur") { prepare(); app.zipSelected() }
             Button("Finder'da göster") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
-            Divider()
-            Button("Sil", role: .destructive) { prepare(); app.trashSelected() }
         }
     }
 
@@ -1881,6 +1934,69 @@ struct SortArrow: Shape {
     }
 }
 
+/// Silme Geri: mavi çöp kutusu ve ona doğru geri dönen ok
+struct UndoTrashGlyph: View {
+    private let ink = Color(red: 0.03, green: 0.07, blue: 0.16)
+
+    var body: some View {
+        ZStack {
+            ZStack {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)      // kutu gövdesi
+                    .fill(glyphBlue)
+                    .frame(width: 16, height: 19)
+                    .offset(y: 3.5)
+                Capsule().fill(glyphBlue)                                  // kapak
+                    .frame(width: 22, height: 4)
+                    .offset(y: -8)
+                Capsule().fill(glyphBlue)                                  // tutamak
+                    .frame(width: 8, height: 3)
+                    .offset(y: -11.5)
+                Rectangle().fill(ink).frame(width: 1.8, height: 11)        // yarıklar
+                    .offset(x: -3.5, y: 4)
+                Rectangle().fill(ink).frame(width: 1.8, height: 11)
+                    .offset(x: 3.5, y: 4)
+            }
+            .offset(x: 11, y: 2)
+            UndoArrow()
+                .stroke(glyphBlue, style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
+                .frame(width: 26, height: 26)
+                .offset(x: -10, y: -3)
+        }
+        .frame(width: 46, height: 38)
+        .shadow(color: Color(red: 0.2, green: 0.6, blue: 1.0).opacity(0.45), radius: 3)
+    }
+}
+
+/// Saat yönünün tersine dönen ok (geri al)
+struct UndoArrow: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        let c = CGPoint(x: r.midX, y: r.midY + 2)
+        let rad = min(r.width, r.height) * 0.38
+        func pt(_ deg: Double) -> CGPoint {
+            let a = deg * Double.pi / 180
+            return CGPoint(x: c.x + rad * CGFloat(cos(a)), y: c.y - rad * CGFloat(sin(a)))
+        }
+        let endDeg = 205.0
+        p.move(to: pt(0))
+        var d = 5.0
+        while d <= endDeg { p.addLine(to: pt(d)); d += 5 }
+        // ok başı: uçtaki yönün tersine ±45°
+        let tip = pt(endDeg)
+        let a = endDeg * Double.pi / 180
+        let bx = sin(a), by = cos(a)          // -(hareket yönü)
+        func head(_ deg: Double) -> CGPoint {
+            let t = deg * Double.pi / 180
+            let x = bx * cos(t) - by * sin(t)
+            let y = bx * sin(t) + by * cos(t)
+            return CGPoint(x: tip.x + 7 * CGFloat(x), y: tip.y + 7 * CGFloat(y))
+        }
+        p.move(to: tip); p.addLine(to: head(45))
+        p.move(to: tip); p.addLine(to: head(-45))
+        return p
+    }
+}
+
 /// Yeniden adlandır: iki metin çizgisi, alt çizgi ve büyük mavi kalem
 struct RenameGlyph: View {
     var body: some View {
@@ -1958,6 +2074,8 @@ struct ActionCell: View {
                     SortGlyph()
                 case .rename:
                     RenameGlyph()
+                case .undoDelete:
+                    UndoTrashGlyph()
                 default:
                     Image(systemName: symbol)
                         .font(.system(size: 30))
@@ -2065,9 +2183,51 @@ struct ArchiveGlyph: View {
     }
 }
 
-struct FilterBar: View {
+struct SearchField: View {
     @Environment(AppModel.self) var app
     @FocusState private var searchFocused: Bool
+
+    var body: some View {
+        let pane = app.active
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14))
+                .foregroundStyle(.white.opacity(0.5))
+            TextField("Ara", text: Binding(
+                get: { app.active.query },
+                set: { app.active.query = $0 }
+            ))
+            .textFieldStyle(.plain)
+            .font(.system(size: 15))
+            .focused($searchFocused)
+            .onExitCommand { app.active.query = ""; searchFocused = false; NSApp.keyWindow?.makeFirstResponder(nil) }
+            .onSubmit { app.active.openPath(app.active.query) }
+            // Yapıştırma tek seferde birden çok karakter ekler: yol ise Enter beklemeden açılır.
+            .onChange(of: pane.query) { old, new in
+                if new.count - old.count > 1 { app.active.openPath(new) }
+            }
+            if !pane.query.isEmpty {
+                Button { app.active.query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .stroke(searchFocused ? Theme.accent.opacity(0.8) : Color.white.opacity(0.1), lineWidth: 1))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 8)
+    }
+}
+
+struct FilterBar: View {
+    @Environment(AppModel.self) var app
 
     var body: some View {
         let pane = app.active
@@ -2103,36 +2263,7 @@ struct FilterBar: View {
                     .overlay(Rectangle().stroke(Color.white.opacity(0.05), lineWidth: 0.5))
                 }
             }
-            // Arama kutusu: sütun genişliğine tam oturur
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.5))
-                TextField("Ara", text: Binding(
-                    get: { app.active.query },
-                    set: { app.active.query = $0 }
-                ))
-                .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .focused($searchFocused)
-                .onExitCommand { app.active.query = ""; searchFocused = false }
-                if !pane.query.isEmpty {
-                    Button { app.active.query = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.5))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .stroke(searchFocused ? Theme.accent.opacity(0.8) : Color.white.opacity(0.1), lineWidth: 1))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 8)
+            SearchField()      // sütunun en altında sabit
         }
         .background(Theme.bar.opacity(0.8))
     }
@@ -2143,7 +2274,7 @@ struct CenterColumn: View {
     @State private var showSort = false
 
     private var visible: [ActionButton] {
-        ActionButton.allCases.filter { $0 == .customize || !app.hiddenButtons.contains($0.rawValue) }
+        ActionButton.allCases
     }
 
     var body: some View {
@@ -2227,7 +2358,7 @@ struct CenterColumn: View {
     private func perform(_ b: ActionButton) {
         switch b {
         case .newFolder: app.beginNewFolder()
-        case .customize: app.showCustomize = true
+        case .undoDelete: app.undoDelete()
         case .sort: break
         case .hidden: app.toggleHidden()
         case .copy: app.transfer(move: false)
@@ -2241,39 +2372,6 @@ struct CenterColumn: View {
         case .info: app.showInfo()
         case .bookmark: app.toggleBookmark()
         }
-    }
-}
-
-struct CustomizeSheet: View {
-    @Environment(AppModel.self) var app
-    @Environment(\.dismiss) var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Düğmeleri ayarla").font(.title2.bold())
-            Text("Ortadaki sütunda görünmesini istediğiniz düğmeleri seçin.")
-                .foregroundStyle(.secondary)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    ForEach(ActionButton.allCases.filter { $0 != .customize }) { b in
-                        Toggle(isOn: Binding(
-                            get: { !app.hiddenButtons.contains(b.rawValue) },
-                            set: { app.setButton(b, visible: $0) }
-                        )) {
-                            Label(b.title, systemImage: b.symbol)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack {
-                Button("Yer imlerini temizle") { app.resetBookmarks() }
-                Spacer()
-                Button("Bitti") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(22)
-        .frame(width: 400, height: 540)
     }
 }
 
@@ -2300,8 +2398,7 @@ struct AppCommands: Commands {
                 .keyboardShortcut("c", modifiers: [.command, .option])
             Button("Diğer Panele Taşı") { model.transfer(move: true) }
                 .keyboardShortcut("m", modifiers: [.command, .option])
-            Button("Çöp Kutusuna Taşı") { model.trashSelected() }
-                .keyboardShortcut(.delete, modifiers: .command)
+            Button("Silme Geri") { model.undoDelete() }
         }
     }
 }
