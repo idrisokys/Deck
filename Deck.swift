@@ -49,7 +49,7 @@ enum SortKey: String, CaseIterable, Identifiable {
 }
 
 enum ActionButton: String, CaseIterable, Identifiable {
-    case newFolder, undoDelete, sort, hidden, copy, move, duplicate, rename, unzip, zip, trash, share, info, bookmark
+    case trash, undoDelete, sort, hidden, copy, move, duplicate, rename, unzip, zip, newFolder, share, info, bookmark
     var id: String { rawValue }
 
     var title: String {
@@ -565,7 +565,7 @@ enum TrashLog {
         }
         if !items.isEmpty {
             batches.append(items)
-            if batches.count > 50 { batches.removeFirst() }
+            if batches.count > 2 { batches.removeFirst() }
         }
         return (items.count, lastError)
     }
@@ -805,7 +805,6 @@ struct GalleryView: View {
         .onKeyPress(.rightArrow) { go(1); return .handled }
         .onKeyPress(.upArrow) { rot(90); return .handled }      // yukarı: sola döndür
         .onKeyPress(.downArrow) { rot(-90); return .handled }   // aşağı: sağa döndür
-        .onKeyPress(keys: [.delete, .deleteForward]) { _ in del(); return .handled }
         .onKeyPress(.return) { if crop { saveCrop(); return .handled }; return .ignored }
         .onKeyPress(.escape) { if crop { crop = false; return .handled }; return .ignored }
     }
@@ -849,27 +848,6 @@ final class AppModel {
 
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var selMonitor: Any?
-    @ObservationIgnored private var keyMonitor: Any?
-
-    /// Ana pencerede ⌫ (Delete) tuşu: seçili öğelerin hepsini onay sormadan Çöp Kutusu'na atar.
-    func installDeleteKey() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            var swallow = false
-            MainActor.assumeIsolated {
-                guard let self, e.keyCode == 51 || e.keyCode == 117 else { return }
-                let mods = e.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                    .subtracting([.function, .numericPad, .capsLock])
-                guard mods.isEmpty, let w = e.window, w.isKeyWindow, w !== Gallery.win,
-                      w.attachedSheet == nil, !self.showPrompt,
-                      !(w.firstResponder is NSText) else { return }      // arama / ad kutusuna yazarken karışma
-                guard !self.active.selectedItems.isEmpty else { return }
-                self.trashSelected()
-                swallow = true
-            }
-            return swallow ? nil : e
-        }
-    }
 
     /// Uygulamanın her yerindeki tıklama seçim işlemini sonlandırır
     func installSelectionReset() {
@@ -880,6 +858,12 @@ final class AppModel {
                 if e.type == .leftMouseUp {
                     self.left.finishDragIfNeeded(); self.right.finishDragIfNeeded()
                 } else {
+                    // Yazı kutusunun dışına tıklanınca yazma modu kapanır
+                    if let w = e.window, w !== Gallery.win, w.attachedSheet == nil,
+                       let ed = w.firstResponder as? NSTextView, let field = ed.delegate as? NSView {
+                        let p = field.convert(e.locationInWindow, from: nil)
+                        if !field.bounds.contains(p) { w.makeFirstResponder(nil) }
+                    }
                     self.left.endSelectMode(); self.right.endSelectMode()
                 }
             }
@@ -1317,6 +1301,10 @@ struct ContentView: View {
         }
         .background(Theme.background)
         .preferredColorScheme(.dark)
+        .onAppear {
+            // Açılışta arama kutusu kendiliğinden odak almasın
+            DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) }
+        }
         .alert(model.promptTitle, isPresented: $model.showPrompt) {
             TextField("Ad", text: $model.promptText)
             Button("Tamam") { app.confirmPrompt() }
@@ -1693,8 +1681,6 @@ struct FileRow: View {
             Button("Kopyasını oluştur") { prepare(); app.duplicateSelected() }
             Button("ZIP oluştur") { prepare(); app.zipSelected() }
             Button("Finder'da göster") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
-            Divider()
-            Button("Sil", role: .destructive) { prepare(); app.trashSelected() }
         }
     }
 
@@ -2026,9 +2012,51 @@ struct ArchiveGlyph: View {
     }
 }
 
-struct FilterBar: View {
+struct SearchField: View {
     @Environment(AppModel.self) var app
     @FocusState private var searchFocused: Bool
+
+    var body: some View {
+        let pane = app.active
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 14))
+                .foregroundStyle(.white.opacity(0.5))
+            TextField("Ara", text: Binding(
+                get: { app.active.query },
+                set: { app.active.query = $0 }
+            ))
+            .textFieldStyle(.plain)
+            .font(.system(size: 15))
+            .focused($searchFocused)
+            .onExitCommand { app.active.query = ""; searchFocused = false; NSApp.keyWindow?.makeFirstResponder(nil) }
+            .onSubmit { app.active.openPath(app.active.query) }
+            // Yapıştırma tek seferde birden çok karakter ekler: yol ise Enter beklemeden açılır.
+            .onChange(of: pane.query) { old, new in
+                if new.count - old.count > 1 { app.active.openPath(new) }
+            }
+            if !pane.query.isEmpty {
+                Button { app.active.query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
+        .overlay(RoundedRectangle(cornerRadius: 8)
+            .stroke(searchFocused ? Theme.accent.opacity(0.8) : Color.white.opacity(0.1), lineWidth: 1))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 8)
+    }
+}
+
+struct FilterBar: View {
+    @Environment(AppModel.self) var app
 
     var body: some View {
         let pane = app.active
@@ -2064,41 +2092,7 @@ struct FilterBar: View {
                     .overlay(Rectangle().stroke(Color.white.opacity(0.05), lineWidth: 0.5))
                 }
             }
-            // Arama kutusu: sütun genişliğine tam oturur
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.5))
-                TextField("Ara", text: Binding(
-                    get: { app.active.query },
-                    set: { app.active.query = $0 }
-                ))
-                .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .focused($searchFocused)
-                .onExitCommand { app.active.query = ""; searchFocused = false }
-                .onSubmit { app.active.openPath(app.active.query) }
-                // Yapıştırma tek seferde birden çok karakter ekler: yol ise Enter beklemeden açılır.
-                .onChange(of: pane.query) { old, new in
-                    if new.count - old.count > 1 { app.active.openPath(new) }
-                }
-                if !pane.query.isEmpty {
-                    Button { app.active.query = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.5))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.35)))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .stroke(searchFocused ? Theme.accent.opacity(0.8) : Color.white.opacity(0.1), lineWidth: 1))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 8)
+            SearchField()      // sütunun en altında sabit
         }
         .background(Theme.bar.opacity(0.8))
     }
@@ -2233,8 +2227,6 @@ struct AppCommands: Commands {
                 .keyboardShortcut("c", modifiers: [.command, .option])
             Button("Diğer Panele Taşı") { model.transfer(move: true) }
                 .keyboardShortcut("m", modifiers: [.command, .option])
-            Button("Çöp Kutusuna Taşı") { model.trashSelected() }
-                .keyboardShortcut(.delete, modifiers: .command)
             Button("Silme Geri") { model.undoDelete() }
         }
     }
@@ -2288,7 +2280,7 @@ struct DeckApp: App {
         Window("Deck", id: "main") {
             ContentView()
                 .environment(model)
-                .onAppear { model.installSelectionReset(); model.installDeleteKey() }
+                .onAppear { model.installSelectionReset() }
                 .frame(minWidth: 960, minHeight: 560)
         }
         .defaultSize(width: 1180, height: 740)
