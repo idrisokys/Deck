@@ -1230,15 +1230,27 @@ final class AppModel {
 
     /// Etkin paneldeki seçimi diğer panele kopyalar / taşır.
     func transfer(move: Bool) {
-        guard let items = requireSelection() else { return }
-        let dest = other.currentURL
-        if move, active.currentURL.normPath == dest.normPath {
+        // Kaynak: seçimin bulunduğu panel (etkin panelde seçim yoksa diğer paneldeki seçim kullanılır)
+        let source: PaneModel
+        if active.selection.isEmpty, !other.selection.isEmpty {
+            source = other
+        } else {
+            source = active
+        }
+        let targetPane = source === left ? right : left
+        let items = source.selectedItems
+        guard !items.isEmpty else {
+            showToast("Önce öğe seçin: dosyaya tek tıklayın, klasör seçmek için ⌘ tuşuyla tıklayın.")
+            return
+        }
+        let dest = targetPane.currentURL
+        if move, source.currentURL.normPath == dest.normPath {
             showToast("Kaynak ve hedef klasör aynı.")
             return
         }
         let list = items.map { ($0.url, $0.isEnterable) }
         showToast(move ? "Taşınıyor…" : "Kopyalanıyor…")
-        active.selection = []
+        source.selection = []
         background {
             let fm = FileManager.default
             var count = 0
