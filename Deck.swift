@@ -344,6 +344,46 @@ final class PaneModel {
         navigate(to: currentURL.deletingLastPathComponent())
     }
 
+    /// Arama kutusuna yapıştırılan dosya/klasör yolunu açar.
+    /// Klasörse içine girer; dosya (ya da .app gibi paket) ise bulunduğu klasörü açıp öğeyi seçer.
+    /// Metin bir yol gibi görünmüyorsa false döner (normal arama olarak kalır).
+    @discardableResult
+    func openPath(_ raw: String) -> Bool {
+        var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return false }
+        // Tırnak içine alınmış yol ("…" ya da '…')
+        if t.count >= 2, let f = t.first, let l = t.last, (f == "\"" && l == "\"") || (f == "'" && l == "'") {
+            t = String(t.dropFirst().dropLast())
+        }
+        if t.hasPrefix("file://"), let u = URL(string: t), u.isFileURL {
+            t = u.path
+        } else {
+            t = t.replacingOccurrences(of: "\\ ", with: " ")     // Terminal tarzı kaçışlı boşluk
+        }
+        guard t.hasPrefix("/") || t.hasPrefix("~") else { return false }
+        let path = (t as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else {
+            app?.showToast("Yol bulunamadı: \(url.path)")
+            return true
+        }
+        query = ""
+        let isPackage = (try? url.resourceValues(forKeys: [.isPackageKey]).isPackage) ?? false
+        if isDir.boolValue && !isPackage {
+            navigate(to: url)
+        } else {
+            typeFilter = nil
+            navigate(to: url.deletingLastPathComponent())
+            if items.contains(where: { $0.url.normPath == url.normPath }),
+               let match = items.first(where: { $0.url.normPath == url.normPath }) {
+                selection = [match.url]
+                anchor = match.url
+            }
+        }
+        return true
+    }
+
     func reload() {
         do {
             items = sort(try fetch(currentURL))
@@ -1888,6 +1928,7 @@ struct FilterBar: View {
                 .font(.system(size: 14))
                 .focused($searchFocused)
                 .onExitCommand { app.active.query = ""; searchFocused = false }
+                .onSubmit { app.active.openPath(app.active.query) }
                 if !pane.query.isEmpty {
                     Button { app.active.query = "" } label: {
                         Image(systemName: "xmark.circle.fill")
