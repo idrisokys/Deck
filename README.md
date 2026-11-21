@@ -82,4 +82,5 @@ chmod +x Deck-build.sh
 - Klavye: **← →** önceki/sonraki resim, **↑** sola döndür, **↓** sağa döndür, **Enter** kırpmayı kopya olarak kaydet, **Esc** kırpmayı iptal.
 - Araç çubuğu: gezinme, döndürme, çevirme, kırpma, tam ekran, slayt gösterisi (3 sn), Çöp Kutusu'na at, paylaş, başka resim aç.
 - Kırpma, resmi **“ad kopya.uzantı”** adıyla aynı klasöre kaydeder; özgün dosyaya dokunmaz.
-- Desteklenen biçimler: JPEG, PNG, HEIC, GIF, TIFF, BMP, WebP.
+- **Desteklenen biçimler:** macOS'un (ImageIO) çözebildiği tüm resim biçimleri: JPEG, PNG, HEIC/HEIF, AVIF, WebP, TIFF, GIF, BMP, JPEG 2000, PSD, ICO/ICNS, RAW (DNG, CR2/CR3, NEF, ARW, ORF, RAF, RW2 …) ve SVG. İşletim sistemi yeni bir biçim eklerse Deck onu da açar. Animasyonlu GIF'te ilk kare gösterilir.
+- **Hız:** İlk resim klasör taranmadan hemen açılır; komşu resimler arka planda önceden çözülür (oklarla gezinme anında olur); küçük resimler dosyadaki gömülü önizlemeden üretilir; slayt gösterisi kapalıyken zamanlayıcı çalışmaz.
