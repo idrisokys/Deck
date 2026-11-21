@@ -391,6 +391,7 @@ final class PaneModel {
                     self.lastNavigation = Date()
                     self.reloadToken += 1          // eski klasör için bekleyen yenilemeleri geçersiz kıl
                     self.startWatching()
+                    self.app?.saveLocations()
                     then?()
                 }
             }
@@ -1038,8 +1039,16 @@ final class AppModel {
 
     init() {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        left = PaneModel(url: home)
-        right = PaneModel(url: home.appendingPathComponent("Downloads"))
+        // Son kullanımdaki klasör konumları (klasör artık yoksa varsayılana dönülür)
+        func saved(_ key: String, fallback: URL) -> URL {
+            guard let path = UserDefaults.standard.string(forKey: key) else { return fallback }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return fallback }
+            return URL(fileURLWithPath: path)
+        }
+        left = PaneModel(url: saved("leftPath", fallback: home))
+        right = PaneModel(url: saved("rightPath", fallback: home.appendingPathComponent("Downloads")))
+        if UserDefaults.standard.string(forKey: "activeSide") == "left" { activeSide = .left }
         // Üst bar artık boş başlar; eski varsayılan yer imleri bir kez temizlenir.
         if !UserDefaults.standard.bool(forKey: "bookmarksClearedV2") {
             UserDefaults.standard.removeObject(forKey: "bookmarks")
@@ -1056,6 +1065,14 @@ final class AppModel {
     var active: PaneModel { activeSide == .left ? left : right }
     var other: PaneModel { activeSide == .left ? right : left }
 
+    /// Her iki panelin konumunu ve etkin paneli bir sonraki açılış için saklar.
+    func saveLocations() {
+        let d = UserDefaults.standard
+        d.set(left.currentURL.path, forKey: "leftPath")
+        d.set(right.currentURL.path, forKey: "rightPath")
+        d.set(activeSide == .left ? "left" : "right", forKey: "activeSide")
+    }
+
     func reloadAll() {
         left.reload()
         right.reload()
@@ -1070,7 +1087,7 @@ final class AppModel {
     /// Aynı panel zaten etkinse atama yapmaz: @Observable her atamada (değer aynı olsa da)
     /// bağımlı tüm görünümleri yeniden hesaplatır.
     func activate(_ side: Side) {
-        if activeSide != side { activeSide = side }
+        if activeSide != side { activeSide = side; saveLocations() }
     }
 
     // MARK: Bildirim
