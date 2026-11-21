@@ -12,6 +12,10 @@ import ImageIO
 enum Theme {
     static let background = Color(red: 0.055, green: 0.063, blue: 0.082)
     static let pane = Color(red: 0.075, green: 0.085, blue: 0.108)
+    /// Sol panel: mavi, sağ panel: kırmızı
+    static let paneBlue = Color(red: 0.055, green: 0.09, blue: 0.19)
+    static let paneRed = Color(red: 0.19, green: 0.075, blue: 0.085)
+    static let blue = Color(red: 0.2, green: 0.5, blue: 1.0)
     static let bar = Color(red: 0.11, green: 0.125, blue: 0.155)
     static let accent = Color(red: 0.95, green: 0.22, blue: 0.22)
 }
@@ -1593,10 +1597,12 @@ struct PaneView: View {
             FileList(pane: pane, side: side)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Theme.pane)
+        .background(side == .left ? Theme.paneBlue : Theme.paneRed)
         .overlay(
+            // Kalın çerçeve (içeride kalır, pencere kenarında kırpılmaz); etkin panel daha parlak
             Rectangle()
-                .stroke(app.activeSide == side ? Theme.accent.opacity(0.55) : Color.white.opacity(0.06), lineWidth: 1)
+                .strokeBorder((side == .left ? Theme.blue : Theme.accent).opacity(app.activeSide == side ? 1 : 0.5),
+                              lineWidth: 4)
                 .allowsHitTesting(false)
         )
         // Panelin herhangi bir yerine (liste, başlık, boş alan) tıklanınca bu panel etkin olur.
