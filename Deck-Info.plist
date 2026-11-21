@@ -27,7 +27,7 @@
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>LSApplicationCategoryType</key>
-    <string>public.app-category.utilities</string>
+    <string>public.app-category.photography</string>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -53,15 +53,13 @@
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Özellikler düğmesi, Finder'ın "Bilgi Al" penceresini açmak için Finder'a erişmek ister.</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>Masaüstü klasöründeki dosyaları listelemek için erişim gerekir.</string>
+    <string>Masaüstündeki resimleri göstermek için erişim gerekir.</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>Belgeler klasöründeki dosyaları listelemek için erişim gerekir.</string>
+    <string>Belgeler klasöründeki resimleri göstermek için erişim gerekir.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>İndirilenler klasöründeki dosyaları listelemek için erişim gerekir.</string>
+    <string>İndirilenler klasöründeki resimleri göstermek için erişim gerekir.</string>
     <key>NSRemovableVolumesUsageDescription</key>
-    <string>Harici disklerdeki dosyaları listelemek için erişim gerekir.</string>
+    <string>Harici disklerdeki resimleri göstermek için erişim gerekir.</string>
 </dict>
 </plist>

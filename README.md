@@ -1,6 +1,6 @@
 # Deck
 
-macOS 15 Sequoia ve üzeri (Apple Silicon) için çift panelli, koyu temalı, tamamen Türkçe dosya yöneticisi. SwiftUI ile yazıldı.
+macOS 15 Sequoia ve üzeri (Apple Silicon) için koyu temalı, tamamen Türkçe resim görüntüleyici. SwiftUI ile yazıldı.
 
 <p align="center"><img src="Deck-icon-1024.png" width="160" alt="Deck simgesi"></p>
 
@@ -9,7 +9,7 @@ macOS 15 Sequoia ve üzeri (Apple Silicon) için çift panelli, koyu temalı, ta
 ```
 .
 ├── .github/workflows/Deck-build.yml   # GitHub Actions derleme iş akışı
-├── Deck.swift                         # Uygulamanın tüm kodu
+├── Deck.swift                         # Uygulamanın tüm kodu (resim görüntüleyici)
 ├── Deck.icns                          # Uygulama simgesi
 ├── Deck-icon-source.png               # Simgenin kaynak tasarımı (balıkçı teknesi)
 ├── Deck-icon-1024.png                 # macOS ızgarasına oturtulmuş 1024 px simge
@@ -77,12 +77,9 @@ chmod +x Deck-build.sh
 
 ## Kullanım notları
 
-- Klasöre **tek tıkla** girilir. Klasör seçmek için **⌘ + tıklama**; dosyalar tek tıkla seçilir, **⇧ + tıklama** aralık seçer.
-- **Fareyle çoklu seçim:** bir dosyanın üzerinde fareyi/basılı tutun (yaklaşık yarım saniye), seçim modu açılır; basılı tutarak aşağı/yukarı sürükleyip birden çok dosya seçin. Seçim modundayken tek tıklama dosya/klasörü seçime ekler ya da çıkarır; seçim boşalınca mod kapanır.
-- **ZIP** dosyasına çift tıklayınca, aynı yerde ZIP'in adını taşıyan klasöre çıkarılır.
-- **Kopyala** ve **Taşı** etkin panelden diğer panele çalışır.
-- Varsayılan sıralama: oluşturma tarihi, en yeni en üstte.
-- Üst bar boş başlar. **Yer imleri** düğmesi seçili klasörü (seçili yoksa açık klasörü) üst bara ekler; barda zaten varsa kaldırır. Bardaki klasöre tıklayınca, en son tıkladığınız (etkin) panelde doğrudan açılır.
-- Kısayollar: ⇧⌘N yeni klasör, ⌘⌫ sil, ⌘R yenile, ⌘[ geri, ⌘↑ üst klasör, ⌥⌘C kopyala, ⌥⌘M taşı.
-- **Yol ile açma:** arama kutusuna bir dosya ya da klasör yolu (`/Users/ad/Belgeler`, `~/Masaüstü`, tırnaklı ya da `file://` biçimi dahil) yapıştırdığınız anda (**Enter'a gerek kalmadan**; elle yazarsanız Enter ile) etkin panelde o klasör açılır; yol bir dosyaysa bulunduğu klasör açılıp dosya seçilir.
-- **Yol çubuğu:** pencerenin altında tek satır halinde, etkin panelde açık olan klasörün yolunu gösterir. Yoldaki bir parçaya tıklayınca etkin panel o konuma gider.
+- Resim açmanın yolları: Finder'da resme sağ tıklayıp **Birlikte Aç → Deck**, uygulamayı varsayılan resim görüntüleyici yapmak, **⌘O** ya da araç çubuğundaki klasör düğmesi.
+- Açılan resimle aynı klasördeki tüm resimler alttaki şeritte listelenir (ada göre sıralı); şeritten bir küçük resme tıklayarak geçiş yapılır.
+- Klavye: **← →** önceki/sonraki resim, **↑** sola döndür, **↓** sağa döndür, **Enter** kırpmayı kopya olarak kaydet, **Esc** kırpmayı iptal.
+- Araç çubuğu: gezinme, döndürme, çevirme, kırpma, tam ekran, slayt gösterisi (3 sn), Çöp Kutusu'na at, paylaş, başka resim aç.
+- Kırpma, resmi **“ad kopya.uzantı”** adıyla aynı klasöre kaydeder; özgün dosyaya dokunmaz.
+- Desteklenen biçimler: JPEG, PNG, HEIC, GIF, TIFF, BMP, WebP.
