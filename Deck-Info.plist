@@ -38,6 +38,15 @@
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>jpg</string>
+                <string>jpeg</string>
+            </array>
+            <key>CFBundleTypeMIMETypes</key>
+            <array>
+                <string>image/jpeg</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.jpeg</string>
@@ -50,6 +59,14 @@
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>png</string>
+            </array>
+            <key>CFBundleTypeMIMETypes</key>
+            <array>
+                <string>image/png</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.png</string>
@@ -62,6 +79,14 @@
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>gif</string>
+            </array>
+            <key>CFBundleTypeMIMETypes</key>
+            <array>
+                <string>image/gif</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.compuserve.gif</string>
@@ -74,6 +99,10 @@
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>bmp</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.microsoft.bmp</string>
@@ -86,6 +115,11 @@
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>tif</string>
+                <string>tiff</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>public.tiff</string>
@@ -98,6 +132,10 @@
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>webp</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>org.webmproject.webp</string>
@@ -110,6 +148,10 @@
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>ico</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.microsoft.ico</string>
@@ -122,6 +164,10 @@
             <string>Viewer</string>
             <key>LSHandlerRank</key>
             <string>Default</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>tga</string>
+            </array>
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.truevision.tga-image</string>
