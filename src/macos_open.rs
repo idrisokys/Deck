@@ -77,9 +77,70 @@ mod imp {
         }
     }
 
+    #[link(name = "objc", kind = "dylib")]
+    extern "C" {
+        fn class_addMethod(cls: *const std::ffi::c_void, name: *const std::ffi::c_void, imp: *const std::ffi::c_void, types: *const c_char) -> i8;
+        fn object_getClass(obj: *const std::ffi::c_void) -> *const std::ffi::c_void;
+    }
+
+    /// NSApplicationDelegate: `application:openFiles:` (macOS'un varsayılan "aç" işleyicisi bunu çağırır)
+    extern "C" fn delegate_open_files(_this: *mut AnyObject, _cmd: Sel, app: *mut AnyObject, files: *mut AnyObject) {
+        let mut found: Vec<PathBuf> = Vec::new();
+        unsafe {
+            if !files.is_null() {
+                let n: usize = msg_send![files, count];
+                for i in 0..n {
+                    let ns: *mut AnyObject = msg_send![files, objectAtIndex: i];
+                    if ns.is_null() {
+                        continue;
+                    }
+                    let c: *const c_char = msg_send![ns, UTF8String];
+                    if !c.is_null() {
+                        found.push(PathBuf::from(CStr::from_ptr(c).to_string_lossy().into_owned()));
+                    }
+                }
+            }
+            if !app.is_null() {
+                // NSApplicationDelegateReplySuccess = 0
+                let _: () = msg_send![app, replyToOpenOrPrint: 0usize];
+            }
+        }
+        if found.is_empty() {
+            return;
+        }
+        if let Ok(mut q) = QUEUE.lock() {
+            q.extend(found);
+        }
+        if let Some(ctx) = CTX.get() {
+            ctx.request_repaint();
+        }
+    }
+
+    /// winit'in uygulama delegesine `application:openFiles:` yöntemini çalışma anında ekler.
+    unsafe fn add_delegate_method() {
+        let Some(app_cls) = AnyClass::get("NSApplication") else { return };
+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let delegate: *mut AnyObject = msg_send![app, delegate];
+        if delegate.is_null() {
+            return;
+        }
+        let cls = object_getClass(delegate as *const std::ffi::c_void);
+        if cls.is_null() {
+            return;
+        }
+        let sel = sel!(application:openFiles:);
+        let sel_ptr: *const std::ffi::c_void = std::mem::transmute::<Sel, *const std::ffi::c_void>(sel);
+        let imp = delegate_open_files as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject);
+        class_addMethod(cls, sel_ptr, imp as *const std::ffi::c_void, b"v@:@@\0".as_ptr() as *const c_char);
+    }
+
     pub fn install(ctx: &eframe::egui::Context) {
         let _ = CTX.set(ctx.clone());
         unsafe {
+            add_delegate_method();
             let Some(superclass) = AnyClass::get("NSObject") else { return };
             let Some(mut builder) = ClassBuilder::new("DeckOpenHandler", superclass) else { return };
             builder.add_method(
