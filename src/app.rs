@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, pos2, vec2, Align, Align2, Color32, Context, FontId, Key, Modifiers, Pos2, Rect, RichText, Rot2, Sense,
+    self, pos2, vec2, Align, Align2, Color32, Context, FontId, Key, Modifiers, Pos2, Rect, RichText, Sense,
     Shape, Stroke, TextureHandle, TextureOptions, Vec2,
 };
 use image::{imageops, RgbaImage};
@@ -800,9 +800,11 @@ impl DeckApp {
         let mut mesh = egui::Mesh::with_texture(tex.id());
         mesh.add_rect_with_uv(img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         if self.rot_v != 0.0 {
-            let rot = Rot2::from_angle(self.rot_v.to_radians());
+            // Pozitif açı: saat yönü (ekranda y aşağı olduğu için)
+            let (sn, cs) = self.rot_v.to_radians().sin_cos();
             for v in mesh.vertices.iter_mut() {
-                v.pos = center + rot * (v.pos - center);
+                let d = v.pos - center;
+                v.pos = center + vec2(cs * d.x - sn * d.y, sn * d.x + cs * d.y);
             }
         }
         painter.add(Shape::mesh(mesh));
