@@ -6,6 +6,7 @@ use std::iter::Peekable;
 use std::path::{Path, PathBuf};
 use std::str::Chars;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -26,6 +27,8 @@ pub enum Msg {
     Thumb(PathBuf, egui::ColorImage),
     Siblings(Vec<PathBuf>),
     Dir(PathBuf, Result<Vec<Entry>, String>),
+    /// Tarama bitti: (tarama numarası, resim içeren klasörler ve resim sayıları)
+    Scan(u64, Vec<(PathBuf, usize)>),
 }
 
 /// Klasör gezgininde bir satır: alt klasör ya da resim
@@ -129,6 +132,19 @@ impl Workers {
             let r = list_dir(&dir);
             let _ = tx.send(Msg::Dir(dir, r));
             ctx.request_repaint();
+        });
+    }
+
+    /// `root` ve tüm alt dizinlerini tarar; resim içeren klasörleri sıralı döndürür.
+    pub fn scan(&self, id: u64, root: PathBuf, cancel: Arc<AtomicBool>, found: Arc<AtomicUsize>) {
+        let tx = self.tx.clone();
+        let ctx = self.ctx.clone();
+        thread::spawn(move || {
+            let r = scan_tree(&root, &cancel, &found, &ctx);
+            if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = tx.send(Msg::Scan(id, r));
+                ctx.request_repaint();
+            }
         });
     }
 
@@ -285,6 +301,47 @@ pub fn list_dir(dir: &Path) -> Result<Vec<Entry>, String> {
     imgs.sort_by(|a, b| natural_cmp(&a.name, &b.name));
     dirs.extend(imgs);
     Ok(dirs)
+}
+
+/// Klasör ağacını yinelemesiz dolaşır (sembolik bağlı klasörlere girmez); resim içeren klasörleri döndürür.
+pub fn scan_tree(root: &Path, cancel: &AtomicBool, found: &AtomicUsize, ctx: &egui::Context) -> Vec<(PathBuf, usize)> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut out: Vec<(PathBuf, usize)> = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    let mut visited = 0usize;
+    while let Some(dir) = stack.pop() {
+        if cancel.load(Relaxed) {
+            break;
+        }
+        visited += 1;
+        if visited % 40 == 0 {
+            ctx.request_repaint();
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let mut n = 0usize;
+        for e in rd.filter_map(|e| e.ok()) {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = e.path();
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                if name.to_lowercase().ends_with(".photoslibrary") {
+                    continue;
+                }
+                stack.push(path);
+            } else if (ft.is_file() || ft.is_symlink()) && is_image(&path) && path.is_file() {
+                n += 1;
+            }
+        }
+        if n > 0 {
+            found.fetch_add(n, Relaxed);
+            out.push((dir, n));
+        }
+    }
+    out.sort_by(|a, b| natural_cmp(&a.0.to_string_lossy(), &b.0.to_string_lossy()));
+    out
 }
 
 // ---------- Kaydetme / çöp ----------

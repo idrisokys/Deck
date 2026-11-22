@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,6 +21,7 @@ const PEN_RED: Color32 = Color32::from_rgb(255, 80, 80);
 const SLIDE_SECS: u64 = 3;
 const TOAST_MS: u64 = 2500;
 const MAX_UNDO: usize = 10;
+const ZOOM_BASE: f32 = 10.0; // büyütme çubuğu: %10 … %1000
 const THUMB_CAP: usize = 600; // bellekte tutulan en çok küçük resim
 
 #[derive(Clone, Copy, PartialEq)]
@@ -79,6 +81,16 @@ pub struct DeckApp {
     hist_back: Vec<PathBuf>,
     hist_fwd: Vec<PathBuf>,
 
+    // tarama (alt dizinlerdeki tüm resim klasörleri)
+    scanning: bool,
+    scan_id: u64,
+    scan_root: PathBuf,
+    scan_list: Vec<(PathBuf, usize)>,
+    scan_cancel: Arc<AtomicBool>,
+    scan_found: Arc<AtomicUsize>,
+    scan_scroll: bool,
+    canvas_rect: Rect,
+
     files: Vec<PathBuf>,
     idx: usize,
 
@@ -106,7 +118,7 @@ pub struct DeckApp {
     undo: Vec<Arc<RgbaImage>>,
 
     // görünüm
-    zoom_v: f32, // -1..1 → 0,25x .. 4x (ortası 1x)
+    zoom_v: f32, // -1..1 → 0,1x .. 10x (ortası 1x)
     rot_v: f32,  // -180..180 derece
     pan: Vec2,
 
@@ -137,6 +149,14 @@ impl DeckApp {
             dir_err: None,
             hist_back: Vec::new(),
             hist_fwd: Vec::new(),
+            scanning: false,
+            scan_id: 0,
+            scan_root: PathBuf::new(),
+            scan_list: Vec::new(),
+            scan_cancel: Arc::new(AtomicBool::new(false)),
+            scan_found: Arc::new(AtomicUsize::new(0)),
+            scan_scroll: false,
+            canvas_rect: Rect::NOTHING,
             files: Vec::new(),
             idx: 0,
             cur: None,
@@ -270,6 +290,13 @@ impl DeckApp {
                     if self.thumbs.len() > THUMB_CAP {
                         self.thumbs.clear();
                         self.thumb_req.clear();
+                    }
+                }
+                Msg::Scan(id, list) => {
+                    if id == self.scan_id {
+                        self.scan_list = list;
+                        self.scanning = false;
+                        self.scan_scroll = true;
                     }
                 }
                 Msg::Dir(d, r) => {
@@ -461,6 +488,7 @@ impl DeckApp {
             self.hist_fwd.clear();
         }
         self.dir = dir.clone();
+        self.scan_scroll = true;
         self.entries.clear();
         self.listing = true;
         self.dir_err = None;
@@ -487,6 +515,28 @@ impl DeckApp {
         if let Some(p) = self.dir.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf()) {
             self.navigate(p, true);
         }
+    }
+
+    /// Geçerli klasörü ve tüm alt dizinlerini tarar.
+    fn start_scan(&mut self) {
+        self.scan_cancel.store(true, Ordering::Relaxed);
+        self.scan_cancel = Arc::new(AtomicBool::new(false));
+        self.scan_found = Arc::new(AtomicUsize::new(0));
+        self.scan_id += 1;
+        self.scan_root = self.dir.clone();
+        self.scan_list.clear();
+        self.scanning = true;
+        self.workers.scan(self.scan_id, self.dir.clone(), self.scan_cancel.clone(), self.scan_found.clone());
+    }
+
+    fn cancel_scan(&mut self) {
+        self.scan_cancel.store(true, Ordering::Relaxed);
+        self.scanning = false;
+    }
+
+    fn close_scan(&mut self) {
+        self.cancel_scan();
+        self.scan_list.clear();
     }
 
     /// Görüntüleyiciden gezgine dön (açık resmin klasörüne gider, listeyi yeniler).
@@ -748,8 +798,6 @@ impl DeckApp {
                     }
                 }
                 self.scroll_cur = false;
-                // Sağ alttaki kaydırıcıların altında kalan küçük resimler de görülebilsin
-                ui.add_space(360.0);
             });
         });
         if let Some(n) = click {
@@ -757,10 +805,16 @@ impl DeckApp {
         }
     }
 
-    /// Büyütme / serbest döndürme kaydırıcıları: şeridin üstünde, sağ altta yüzer.
+    /// Büyütme / serbest döndürme kaydırıcıları: resim alanının sağ üstüne sabitlenir.
     fn slider_overlay(&mut self, ctx: &Context) {
+        let pos = if self.canvas_rect.is_positive() {
+            self.canvas_rect.right_top() + vec2(-12.0, 12.0)
+        } else {
+            ctx.screen_rect().right_top() + vec2(-12.0, 60.0)
+        };
         egui::Area::new(egui::Id::new("gorunum_ayarlari"))
-            .anchor(Align2::RIGHT_BOTTOM, vec2(-14.0, -14.0))
+            .fixed_pos(pos)
+            .pivot(Align2::RIGHT_TOP)
             .order(Order::Foreground)
             .show(ctx, |ui| {
                 egui::Frame::none()
@@ -780,7 +834,7 @@ impl DeckApp {
                 ui.spacing_mut().slider_width = 150.0;
 
                 ui.horizontal(|ui| {
-                    let label = format!("%{}", (4f32.powf(self.zoom_v) * 100.0).round() as i32);
+                    let label = format!("%{}", (ZOOM_BASE.powf(self.zoom_v) * 100.0).round() as i32);
                     if reset_label(ui, &label, "Sıfırla (%100)") {
                         self.zoom_v = 0.0;
                     }
@@ -810,13 +864,12 @@ impl DeckApp {
 
     // ---------- Klasör gezgini ----------
 
-    /// Üstteki gezinme çubuğu: geri / ileri / yukarı / Pictures + tıklanabilir yol.
+    /// Üstteki gezinme çubuğu (pencereye ortalı): geri / ileri / yukarı / Tara / Pictures + tıklanabilir yol.
     fn browser_bar(&mut self, ui: &mut egui::Ui) {
         let pics = self.pics.clone();
-        let mut act = 0u8; // 1 geri, 2 ileri, 3 yukarı, 4 Pictures, 5 klasör seç, 6 resim aç
+        let mut act = 0u8; // 1 geri, 2 ileri, 3 yukarı, 4 Pictures, 5 klasör seç, 6 resim aç, 7 tara, 8 durdur
         let mut nav: Option<PathBuf> = None;
 
-        // Yol parçaları
         let mut crumbs: Vec<(String, PathBuf)> = Vec::new();
         let mut acc = PathBuf::new();
         for c in self.dir.components() {
@@ -832,60 +885,71 @@ impl DeckApp {
         let can_fwd = !self.hist_fwd.is_empty();
         let can_up = self.dir.parent().map_or(false, |p| !p.as_os_str().is_empty());
         let at_pics = self.dir == pics;
+        let scanning = self.scanning;
 
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(can_back, |ui| {
-                if tb(ui, "Geri", "Önceki klasör", false, None) {
-                    act = 1;
+        ui.vertical_centered(|ui| {
+            let w = ui.available_width().min(1000.0);
+            ui.allocate_ui_with_layout(vec2(w, 32.0), Layout::left_to_right(Align::Center), |ui| {
+                ui.add_enabled_ui(can_back, |ui| {
+                    if tb(ui, "Geri", "Önceki klasör", false, None) {
+                        act = 1;
+                    }
+                });
+                ui.add_enabled_ui(can_fwd, |ui| {
+                    if tb(ui, "İleri", "Sonraki klasör", false, None) {
+                        act = 2;
+                    }
+                });
+                ui.add_enabled_ui(can_up, |ui| {
+                    if tb(ui, "Yukarı", "Üst klasör (Backspace)", false, None) {
+                        act = 3;
+                    }
+                });
+                if scanning {
+                    if tb(ui, "Durdur", "Taramayı durdur", true, None) {
+                        act = 8;
+                    }
+                } else if tb(ui, "Tara", "Bu klasördeki ve tüm alt dizinlerdeki resimleri tara", false, None) {
+                    act = 7;
                 }
-            });
-            ui.add_enabled_ui(can_fwd, |ui| {
-                if tb(ui, "İleri", "Sonraki klasör", false, None) {
-                    act = 2;
+                if tb(ui, "Pictures", "Pictures klasörüne git", at_pics, None) {
+                    act = 4;
                 }
-            });
-            ui.add_enabled_ui(can_up, |ui| {
-                if tb(ui, "Yukarı", "Üst klasör (Backspace)", false, None) {
-                    act = 3;
-                }
-            });
-            if tb(ui, "Pictures", "Pictures klasörüne git", at_pics, None) {
-                act = 4;
-            }
-            ui.separator();
+                ui.separator();
 
-            let w = (ui.available_width() - 210.0).max(120.0);
-            ui.allocate_ui(vec2(w, 30.0), |ui| {
-                egui::ScrollArea::horizontal()
-                    .id_source("yol_cubugu")
-                    .stick_to_right(true)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            for (i, (label, path)) in crumbs.iter().enumerate() {
-                                if i > 0 {
-                                    ui.label(RichText::new(">").weak());
+                let cw = (ui.available_width() - 210.0).max(120.0);
+                ui.allocate_ui(vec2(cw, 30.0), |ui| {
+                    egui::ScrollArea::horizontal()
+                        .id_source("yol_cubugu")
+                        .stick_to_right(true)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for (i, (label, path)) in crumbs.iter().enumerate() {
+                                    if i > 0 {
+                                        ui.label(RichText::new(">").weak());
+                                    }
+                                    let mut t = RichText::new(label.as_str()).size(15.0);
+                                    if i == last {
+                                        t = t.color(BLUE).strong();
+                                    }
+                                    if ui.add(egui::Button::new(t).frame(false)).clicked() && i != last {
+                                        nav = Some(path.clone());
+                                    }
                                 }
-                                let mut t = RichText::new(label.as_str()).size(15.0);
-                                if i == last {
-                                    t = t.color(BLUE).strong();
-                                }
-                                if ui.add(egui::Button::new(t).frame(false)).clicked() && i != last {
-                                    nav = Some(path.clone());
-                                }
-                            }
+                            });
                         });
-                    });
-            });
+                });
 
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if tb(ui, "Aç…", "Resim aç (⌘O)", false, None) {
-                    act = 6;
-                }
-                if tb(ui, "Klasör seç…", "Başka bir klasöre git", false, None) {
-                    act = 5;
-                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if tb(ui, "Aç…", "Resim aç (⌘O)", false, None) {
+                        act = 6;
+                    }
+                    if tb(ui, "Klasör seç…", "Başka bir klasöre git", false, None) {
+                        act = 5;
+                    }
+                });
             });
         });
         ui.add_space(4.0);
@@ -901,9 +965,105 @@ impl DeckApp {
                 }
             }
             6 => self.open_dialog(),
+            7 => self.start_scan(),
+            8 => self.cancel_scan(),
             _ => {}
         }
         if let Some(p) = nav {
+            self.navigate(p, true);
+        }
+    }
+
+    /// Alttaki panel: taranan, resim içeren klasörler sıralı listelenir; aralarında gezilir.
+    fn scan_panel(&mut self, ui: &mut egui::Ui) {
+        let mut go: Option<PathBuf> = None;
+        let mut close = false;
+        let total: usize = self.scan_list.iter().map(|x| x.1).sum();
+        let cur_i = self.scan_list.iter().position(|(p, _)| *p == self.dir);
+        let prev = cur_i.and_then(|i| i.checked_sub(1)).and_then(|i| self.scan_list.get(i)).map(|x| x.0.clone());
+        let next = match cur_i {
+            Some(i) => self.scan_list.get(i + 1),
+            None => self.scan_list.first(),
+        }
+        .map(|x| x.0.clone());
+        let scanning = self.scanning;
+        let found = self.scan_found.load(Ordering::Relaxed);
+        let n_dirs = self.scan_list.len();
+        let root = self.scan_root.clone();
+
+        ui.horizontal(|ui| {
+            if scanning {
+                ui.spinner();
+                ui.label(format!("Taranıyor… {found} resim bulundu"));
+            } else {
+                ui.label(RichText::new(format!("Taranan klasörler: {n_dirs} klasör, {total} resim")).strong());
+                ui.add_enabled_ui(prev.is_some(), |ui| {
+                    if tb(ui, "Önceki klasör", "Listede bir önceki klasör", false, None) {
+                        go = prev.clone();
+                    }
+                });
+                ui.add_enabled_ui(next.is_some(), |ui| {
+                    if tb(ui, "Sonraki klasör", "Listede bir sonraki klasör", false, None) {
+                        go = next.clone();
+                    }
+                });
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if tb(ui, "Kapat", "Listeyi kapat", false, None) {
+                    close = true;
+                }
+            });
+        });
+        ui.add_space(4.0);
+
+        if !self.scan_list.is_empty() {
+            let scroll = self.scan_scroll;
+            egui::ScrollArea::horizontal().id_source("tarama_listesi").auto_shrink([false, false]).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    for (p, n) in self.scan_list.iter() {
+                        let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 64.0), Sense::click());
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let is_cur = *p == self.dir;
+                        let painter = ui.painter();
+                        painter.rect_filled(rect, 8.0, Color32::from_gray(if resp.hovered() { 52 } else { 38 }));
+                        if is_cur {
+                            painter.rect_stroke(rect, 8.0, Stroke::new(2.0, BLUE));
+                            if scroll {
+                                ui.scroll_to_rect(rect, Some(Align::Center));
+                            }
+                        }
+                        let name = if *p == root {
+                            p.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string())
+                        } else {
+                            p.strip_prefix(&root).map(|r| r.display().to_string()).unwrap_or_else(|_| p.display().to_string())
+                        };
+                        let mut job = egui::text::LayoutJob::simple(name, FontId::proportional(13.5), Color32::WHITE, 170.0);
+                        job.wrap.max_rows = 1;
+                        job.wrap.break_anywhere = true;
+                        let g = ui.painter().layout_job(job);
+                        ui.painter().galley(rect.min + vec2(10.0, 10.0), g, Color32::WHITE);
+                        ui.painter().text(
+                            rect.min + vec2(10.0, 36.0),
+                            Align2::LEFT_TOP,
+                            format!("{n} resim"),
+                            FontId::proportional(12.0),
+                            Color32::GRAY,
+                        );
+                        if resp.clicked() {
+                            go = Some(p.clone());
+                        }
+                        resp.on_hover_text(p.display().to_string());
+                    }
+                });
+            });
+            self.scan_scroll = false;
+        }
+
+        if close {
+            self.close_scan();
+        }
+        if let Some(p) = go {
             self.navigate(p, true);
         }
     }
@@ -1148,6 +1308,7 @@ impl DeckApp {
         let avail = ui.available_size();
         let (resp, painter) = ui.allocate_painter(avail, Sense::click_and_drag());
         let rect = resp.rect;
+        self.canvas_rect = rect;
 
         let (Some(tex), Some(cur)) = (self.tex.clone(), self.cur.clone()) else {
             let text = if self.failed {
@@ -1181,10 +1342,10 @@ impl DeckApp {
         if resp.hovered() && !self.crop && !self.pen {
             let zd = ctx.input(|i| i.zoom_delta());
             if (zd - 1.0).abs() > 1e-4 {
-                self.zoom_v = (self.zoom_v + zd.ln() / 4f32.ln()).clamp(-1.0, 1.0);
+                self.zoom_v = (self.zoom_v + zd.ln() / ZOOM_BASE.ln()).clamp(-1.0, 1.0);
             }
         }
-        let zoom = 4f32.powf(self.zoom_v);
+        let zoom = ZOOM_BASE.powf(self.zoom_v);
         if zoom <= 1.001 {
             self.pan = Vec2::ZERO;
         }
@@ -1242,6 +1403,20 @@ impl eframe::App for DeckApp {
         match self.screen {
             Screen::Browse => {
                 egui::TopBottomPanel::top("gezgin").show(ctx, |ui| self.browser_bar(ui));
+                if self.scanning || !self.scan_list.is_empty() {
+                    let h = if self.scan_list.is_empty() { 48.0 } else { 134.0 };
+                    egui::TopBottomPanel::bottom("taranan")
+                        .exact_height(h)
+                        .frame(
+                            egui::Frame::none()
+                                .fill(Color32::from_rgb(28, 31, 33))
+                                .inner_margin(egui::Margin::symmetric(14.0, 8.0)),
+                        )
+                        .show(ctx, |ui| self.scan_panel(ui));
+                }
+                if self.scanning {
+                    ctx.request_repaint_after(Duration::from_millis(150));
+                }
                 egui::CentralPanel::default()
                     .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(14.0, 10.0)))
                     .show(ctx, |ui| self.browser_grid(ui));

@@ -62,12 +62,13 @@ ya da uygulamaya **sağ tıklayıp → Aç** deyin.
 ## Kullanım
 
 - **Klasör gezgini (açılış ekranı):** uygulama **Pictures** klasöründe açılır. Üstteki çubukta **Geri / İleri / Yukarı / Pictures**, tıklanabilir yol ve **Klasör seç…** vardır; içerik her satırda **altı ön izleme** olacak şekilde dizilir. Klasöre tıklayınca içine girilir, **bir resme tıklayınca** görüntüleyici açılır. Görüntüleyiciden gezgine dönmek için araç çubuğundaki **Klasörler**, **Esc** ya da **⌘B**; gezginde **Backspace** üst klasöre çıkar. Bir klasörü pencereye sürükleyip bırakmak da gezgini oraya götürür.
-- **Alt şerit:** küçük resim şeridi pencerenin tam genişliğini kaplar; büyütme ve serbest döndürme kaydırıcıları şeridin üstünde, sağ altta yüzer.
+- **Tara:** gezgin çubuğundaki **Tara**, açık klasörü ve tüm alt dizinlerini tarar; bitince resim içeren klasörler altta sıralı kartlar olarak listelenir (kart = klasör + resim sayısı). Karta tıklayarak ya da **Önceki / Sonraki klasör** düğmeleriyle aralarında gezilir. Tarama sürerken düğme **Durdur** olur.
+- **Alt şerit:** küçük resim şeridi pencerenin tam genişliğini kaplar. Büyütme ve serbest döndürme kaydırıcıları resim alanının sağ üstüne sabittir.
 - **Resim açma:** **⌘O** ya da araç çubuğundaki **Aç…**, resmi pencereye **sürükleyip bırakma**, ya da komut satırından `Deck resim.jpg`.
 - Açılan resimle aynı klasördeki tüm resimler alttaki şeritte (ada göre, sayıya duyarlı sıralı) listelenir; küçük resme tıklayarak geçiş yapılır.
 - **Klavye:** **← →** önceki/sonraki, **↑** sola döndür, **↓** sağa döndür, **⌘Z** geri al, **⌘S** kopya olarak kaydet, **⌘O** aç, **Esc** kırpmayı/kalemi kapatır (tam ekrandan çıkar).
 - **Araç çubuğu:** gezinme, döndürme (90°), çevirme, kırpma, kırmızı kalem, geri al, tam ekran, slayt gösterisi (3 sn), kaydet, Çöp Kutusu'na at, Finder'da göster, aç.
-- **Kaydırıcılar (alt sağ):** üstteki **büyütme/küçültme** (sağa çek → büyür, sola çek → küçülür; %25–%400), alttaki **serbest döndürme** (sola çek → sola, sağa çek → sağa; −180°…+180°). Sayıya tıklamak sıfırlar. Büyütülmüş resim sürükleyerek kaydırılır; dokunmatik yüzeyde sıkıştırma da çalışır. Bu ikisi yalnızca görünümü değiştirir, kaydedilen kopyaya yansımaz.
+- **Kaydırıcılar (alt sağ):** üstteki **büyütme/küçültme** (sağa çek → büyür, sola çek → küçülür; %10–%1000), alttaki **serbest döndürme** (sola çek → sola, sağa çek → sağa; −180°…+180°). Sayıya tıklamak sıfırlar. Büyütülmüş resim sürükleyerek kaydırılır; dokunmatik yüzeyde sıkıştırma da çalışır. Bu ikisi yalnızca görünümü değiştirir, kaydedilen kopyaya yansımaz.
 - **Kırmızı kalem:** resmin üzerine sürükleyerek çizilir; çizgiler doğrudan resme işlenir. **Geri al** son 10 işlemi (çizgi, döndürme, çevirme) geri alır.
 - **Kaydet:** sormadan, kırpma alanı, çizgiler ve döndürme/çevirmeyle birlikte resmi **“ad kopya.uzantı”** adıyla aynı klasöre kaydeder; özgün dosyaya dokunmaz. Kaydedilen biçim JPEG/PNG/TIFF/BMP/GIF'tir, diğer biçimler PNG olarak yazılır.
 - **Hız:** resim klasör taranmadan hemen açılır; komşu resimler arka planda önceden çözülür; küçük resimler yalnızca görünür olunca üretilir; slayt gösterisi kapalıyken zamanlayıcı çalışmaz.
