@@ -14,6 +14,9 @@ image = "0.25.5"     # resim çözme/kodlama
 rfd = "0.15"         # "Resim aç" diyaloğu
 trash = "5"          # Çöp Kutusu'na atma
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"        # Finder'dan "dosyayı aç" olayını yakalamak için
+
 [profile.release]
 opt-level = 3
 lto = "thin"

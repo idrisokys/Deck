@@ -145,6 +145,7 @@ impl DeckApp {
     pub fn new(cc: &eframe::CreationContext<'_>, start: Option<PathBuf>) -> Self {
         let ctx = cc.egui_ctx.clone();
         load_fonts(&ctx);
+        crate::macos_open::install(&ctx); // Finder'dan çift tık / Birlikte aç
         let mut v = egui::Visuals::dark();
         v.panel_fill = BG;
         ctx.set_visuals(v);
@@ -629,8 +630,10 @@ impl DeckApp {
     // ---------- Girdiler ----------
 
     fn handle_drop(&mut self, ctx: &Context) {
-        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-        if let Some(p) = dropped.into_iter().filter_map(|f| f.path).find(|p| p.is_file() || p.is_dir()) {
+        // Sürükle-bırak + Finder'dan çift tık / "Birlikte aç" / Dock'a sürükleme
+        let mut paths: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        paths.extend(crate::macos_open::take());
+        if let Some(p) = paths.into_iter().find(|p| p.is_file() || p.is_dir()) {
             if p.is_dir() {
                 self.screen = Screen::Browse;
                 self.navigate(p, true);

@@ -14,6 +14,7 @@ macOS (Apple Silicon) için koyu temalı, **Türkçe ve İngilizce** resim gör�
 ├── src/
 │   ├── main.rs                        # Giriş noktası, pencere ayarları
 │   ├── app.rs                         # Arayüz: araç çubuğu, resim alanı, kırpma, kalem, şerit, kaydırıcılar
+│   ├── macos_open.rs                  # Finder'dan çift tık / Birlikte aç (Apple Event) desteği
 │   └── gallery.rs                     # Klasör tarama, resim çözme, önbellek, arka plan işçileri, kaydetme
 ├── Deck.icns                          # Uygulama simgesi
 ├── Deck-icon-1024.png                 # macOS ızgarasına oturtulmuş 1024 px simge (derlemeye gömülür)
