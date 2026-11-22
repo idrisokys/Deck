@@ -850,9 +850,7 @@ impl DeckApp {
                             );
                         } else {
                             ui.painter().rect_filled(rect, 4.0, Color32::from_gray(40));
-                            if self.thumb_req.insert(p.clone()) {
-                                let _ = self.workers.thumb_tx.send(p);
-                            }
+                            self.workers.want_thumb(&p);
                         }
                     }
                     if n == self.idx {
@@ -1155,9 +1153,7 @@ impl DeckApp {
                         );
                     } else {
                         draw_folder(painter, tile);
-                        if self.thumb_req.insert(it.first.clone()) {
-                            let _ = self.workers.thumb_tx.send(it.first.clone());
-                        }
+                        self.workers.want_thumb(&it.first);
                     }
                     if resp.hovered() {
                         painter.rect_stroke(tile, 8.0, Stroke::new(2.0, BLUE));
@@ -1266,8 +1262,8 @@ impl DeckApp {
                                 Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
                                 Color32::WHITE,
                             );
-                        } else if self.thumb_req.insert(e.path.clone()) {
-                            let _ = self.workers.thumb_tx.send(e.path.clone());
+                        } else {
+                            self.workers.want_thumb(&e.path);
                         }
                         if hov {
                             painter.rect_stroke(tile, 8.0, Stroke::new(2.0, BLUE));
@@ -1507,6 +1503,7 @@ impl DeckApp {
 
 impl eframe::App for DeckApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+        self.workers.begin_frame();
         self.pump(ctx);
         // İlk açılışta (yalnızca bir kez) varsayılan resim açıcı olmayı sor
         static ASKED: std::sync::Once = std::sync::Once::new();

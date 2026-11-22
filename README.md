@@ -15,6 +15,7 @@ macOS (Apple Silicon) için koyu temalı, **Türkçe ve İngilizce** resim gör�
 │   ├── main.rs                        # Giriş noktası, pencere ayarları
 │   ├── app.rs                         # Arayüz: araç çubuğu, resim alanı, kırpma, kalem, şerit, kaydırıcılar
 │   ├── macos_open.rs                  # Finder'dan çift tık / Birlikte aç (Apple Event) desteği
+│   ├── thumbs.rs                      # Küçük resimler: hızlı JPEG çözme, disk önbelleği, temizlik
 │   └── gallery.rs                     # Klasör tarama, resim çözme, önbellek, arka plan işçileri, kaydetme
 ├── Deck.icns                          # Uygulama simgesi
 ├── Deck-icon-1024.png                 # macOS ızgarasına oturtulmuş 1024 px simge (derlemeye gömülür)
@@ -85,3 +86,9 @@ ya da uygulamaya **sağ tıklayıp → Aç** deyin.
 | Paylaş düğmesi | Var | Yok (yerine **Finder'da göster**) |
 | Geri al | Yok | Var |
 | Asgari macOS | 15 | 11 |
+
+## Küçük resim önbelleği
+
+Küçük resimler `~/Library/Caches/Deck/thumbs` klasöründe saklanır (dosya yolu, boyutu ve değişiklik zamanına göre; dosya değişirse yeniden üretilir).
+30 günden uzun süredir kullanılmayanlar ve 400 MB'ı aşan kısım (en eskiden başlayarak) uygulama açıldıktan kısa süre sonra otomatik silinir.
+Elle temizlemek için klasörü silmeniz yeterli: `rm -rf ~/Library/Caches/Deck/thumbs`

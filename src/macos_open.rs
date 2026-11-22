@@ -137,10 +137,11 @@ mod imp {
         class_addMethod(cls, sel_ptr, imp as *const std::ffi::c_void, b"v@:@@\0".as_ptr() as *const c_char);
     }
 
-    pub fn install(ctx: &eframe::egui::Context) {
-        let _ = CTX.set(ctx.clone());
-        unsafe {
-            add_delegate_method();
+    /// Apple Event işleyicisini eframe/winit pencere döngüsü başlamadan kaydet.
+    /// Finder, uygulama kapalıyken belge açma olayını başlangıçta gönderebilir.
+    pub fn install_open_event_handler() {
+        static INSTALLED: OnceLock<()> = OnceLock::new();
+        let _ = INSTALLED.get_or_init(|| unsafe {
             let Some(superclass) = AnyClass::get("NSObject") else { return };
             let Some(mut builder) = ClassBuilder::new("DeckOpenHandler", superclass) else { return };
             builder.add_method(
@@ -148,7 +149,7 @@ mod imp {
                 handle_open as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject),
             );
             let cls = builder.register();
-            let handler: *mut AnyObject = msg_send![cls, new]; // bilerek serbest bırakılmaz
+            let handler: *mut AnyObject = msg_send![cls, new]; // AppleEventManager için canlı tutulur
             let Some(mgr_cls) = AnyClass::get("NSAppleEventManager") else { return };
             let mgr: *mut AnyObject = msg_send![mgr_cls, sharedAppleEventManager];
             if mgr.is_null() || handler.is_null() {
@@ -161,11 +162,22 @@ mod imp {
                 forEventClass: AE_CLASS,
                 andEventID: AE_OPEN_DOCS
             ];
-        }
+        });
+    }
+
+    pub fn install(ctx: &eframe::egui::Context) {
+        let _ = CTX.set(ctx.clone());
+        unsafe { add_delegate_method(); }
     }
 }
 
-/// Uygulama başlarken bir kez çağrılır (macOS dışında hiçbir şey yapmaz).
+/// Apple Event kaydını pencere/eframe başlamadan önce çağır.
+pub fn install_open_event_handler() {
+    #[cfg(target_os = "macos")]
+    imp::install_open_event_handler();
+}
+
+/// Pencere oluşturulduğunda bağlamı kaydet ve winit delegate yöntemini ekle.
 pub fn install(ctx: &eframe::egui::Context) {
     #[cfg(target_os = "macos")]
     imp::install(ctx);

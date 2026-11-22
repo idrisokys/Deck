@@ -13,6 +13,7 @@ eframe = "0.29"      # egui tabanlı pencere + arayüz
 image = "0.25.5"     # resim çözme/kodlama
 rfd = "0.15"         # "Resim aç" diyaloğu
 trash = "5"          # Çöp Kutusu'na atma
+jpeg-decoder = { version = "0.3", default-features = false }  # JPEG'i küçük boyutta hızlı çözmek için (küçük resimler)
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"        # Finder'dan "dosyayı aç" olayını yakalamak için

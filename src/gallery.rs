@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use eframe::egui;
+
+use crate::thumbs;
 use image::codecs::jpeg::JpegEncoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat, ImageReader, Rgba, RgbaImage};
@@ -88,7 +90,7 @@ pub fn is_image(p: &Path) -> bool {
 // ---------- Çözme ----------
 
 /// EXIF yönü uygulanmış olarak çözer.
-fn decode_dyn(path: &Path) -> Result<DynamicImage, String> {
+pub(crate) fn decode_dyn(path: &Path) -> Result<DynamicImage, String> {
     let mut reader = ImageReader::open(path)
         .map_err(|e| e.to_string())?
         .with_guessed_format()
@@ -105,17 +107,12 @@ pub fn decode(path: &Path) -> Result<RgbaImage, String> {
     decode_dyn(path).map(|d| d.to_rgba8())
 }
 
-fn make_thumb(path: &Path) -> Option<egui::ColorImage> {
-    let img = decode_dyn(path).ok()?.thumbnail(256, 256).to_rgba8();
-    let size = [img.width() as usize, img.height() as usize];
-    Some(egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()))
-}
-
 // ---------- Arka plan işçileri ----------
 
 pub struct Workers {
     pub full_tx: Sender<PathBuf>,
     pub thumb_tx: Sender<PathBuf>,
+    q: Arc<thumbs::Queue>,
     tx: Sender<Msg>,
     pub ctx: egui::Context,
 }
@@ -153,17 +150,40 @@ impl Workers {
                 ctx.request_repaint();
             });
         }
+        let q = Arc::new(thumbs::Queue::default());
         {
             let tx = tx.clone();
             let ctx = ctx.clone();
-            spawn_pool(4, thumb_rx, move |p| {
-                if let Some(ci) = make_thumb(&p) {
-                    let _ = tx.send(Msg::Thumb(p, ci));
+            let q = q.clone();
+            let n = thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(2, 6);
+            spawn_pool(n, thumb_rx, move |p| {
+                // Kaydırma sırasında artık görünmeyen resimler için çözme yapılmaz
+                if !q.still_wanted(&p) {
+                    return;
+                }
+                let r = thumbs::make_thumb(&p);
+                let ok = r.is_some();
+                if let Some(ci) = r {
+                    let _ = tx.send(Msg::Thumb(p.clone(), ci));
                     ctx.request_repaint();
                 }
+                q.done(&p, ok);
             });
         }
-        Workers { full_tx, thumb_tx, tx, ctx: ctx.clone() }
+        thumbs::clean_cache_later();
+        Workers { full_tx, thumb_tx, q, tx, ctx: ctx.clone() }
+    }
+
+    /// Her kare çiziminin başında çağrılır (kuyruktaki eski istekleri ayıklamak için).
+    pub fn begin_frame(&self) {
+        self.q.begin_frame();
+    }
+
+    /// Bu resmin küçük resmi şu anda ekranda görünüyor ve henüz yok; gerekirse üretim sırasına alınır.
+    pub fn want_thumb(&self, p: &Path) {
+        if self.q.want(p) {
+            let _ = self.thumb_tx.send(p.to_path_buf());
+        }
     }
 
     /// Klasörün alt klasörlerini ve resimlerini arka planda listeler (gezgin için).

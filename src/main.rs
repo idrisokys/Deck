@@ -28,6 +28,9 @@ fn main() -> eframe::Result<()> {
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
 
+    // Finder uygulama kapalıyken belge açma Apple Event'ini ilk pencere kurulmadan yakala.
+    macos_open::install_open_event_handler();
+
     eframe::run_native(
         "Deck",
         options,
