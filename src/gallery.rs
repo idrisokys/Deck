@@ -28,7 +28,15 @@ pub enum Msg {
     Siblings(Vec<PathBuf>),
     Dir(PathBuf, Result<Vec<Entry>, String>),
     /// Tarama bitti: (tarama numarası, resim içeren klasörler ve resim sayıları)
-    Scan(u64, Vec<(PathBuf, usize)>),
+    Scan(u64, Vec<ScanItem>),
+}
+
+/// Taramada bulunan, resim içeren bir klasör
+#[derive(Clone)]
+pub struct ScanItem {
+    pub dir: PathBuf,
+    pub count: usize,
+    pub first: PathBuf, // ön izleme için klasördeki bir resim
 }
 
 /// Klasör gezgininde bir satır: alt klasör ya da resim
@@ -37,6 +45,40 @@ pub struct Entry {
     pub path: PathBuf,
     pub name: String,
     pub is_dir: bool,
+}
+
+/// macOS dosya adlarını ayrık (NFD) verebilir: "g" + birleştirici işaret gibi. egui bunları düzgün çizemez;
+/// Türkçe harfleri tek karakterli (NFC) biçime çevirir. Yalnızca görüntü için kullanılır, yol değişmez.
+pub fn nfc_tr(s: &str) -> String {
+    if !s.chars().any(|c| matches!(c, '\u{0306}' | '\u{0327}' | '\u{0308}' | '\u{0307}')) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        let comp = match (c, it.peek().copied()) {
+            ('g', Some('\u{0306}')) => Some('ğ'),
+            ('G', Some('\u{0306}')) => Some('Ğ'),
+            ('s', Some('\u{0327}')) => Some('ş'),
+            ('S', Some('\u{0327}')) => Some('Ş'),
+            ('c', Some('\u{0327}')) => Some('ç'),
+            ('C', Some('\u{0327}')) => Some('Ç'),
+            ('o', Some('\u{0308}')) => Some('ö'),
+            ('O', Some('\u{0308}')) => Some('Ö'),
+            ('u', Some('\u{0308}')) => Some('ü'),
+            ('U', Some('\u{0308}')) => Some('Ü'),
+            ('I', Some('\u{0307}')) => Some('İ'),
+            _ => None,
+        };
+        match comp {
+            Some(r) => {
+                it.next();
+                out.push(r);
+            }
+            None => out.push(c),
+        }
+    }
+    out
 }
 
 pub fn is_image(p: &Path) -> bool {
@@ -136,11 +178,11 @@ impl Workers {
     }
 
     /// `root` ve tüm alt dizinlerini tarar; resim içeren klasörleri sıralı döndürür.
-    pub fn scan(&self, id: u64, root: PathBuf, cancel: Arc<AtomicBool>, found: Arc<AtomicUsize>) {
+    pub fn scan(&self, id: u64, root: PathBuf, skip: Vec<PathBuf>, cancel: Arc<AtomicBool>, found: Arc<AtomicUsize>) {
         let tx = self.tx.clone();
         let ctx = self.ctx.clone();
         thread::spawn(move || {
-            let r = scan_tree(&root, &cancel, &found, &ctx);
+            let r = scan_tree(&root, &skip, &cancel, &found, &ctx);
             if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 let _ = tx.send(Msg::Scan(id, r));
                 ctx.request_repaint();
@@ -283,10 +325,11 @@ pub fn list_dir(dir: &Path) -> Result<Vec<Entry>, String> {
     let mut dirs: Vec<Entry> = Vec::new();
     let mut imgs: Vec<Entry> = Vec::new();
     for e in rd.filter_map(|e| e.ok()) {
-        let name = e.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
+        let raw = e.file_name().to_string_lossy().to_string();
+        if raw.starts_with('.') {
             continue;
         }
+        let name = nfc_tr(&raw);
         let path = e.path();
         if path.is_dir() {
             if name.to_lowercase().ends_with(".photoslibrary") {
@@ -303,10 +346,17 @@ pub fn list_dir(dir: &Path) -> Result<Vec<Entry>, String> {
     Ok(dirs)
 }
 
-/// Klasör ağacını yinelemesiz dolaşır (sembolik bağlı klasörlere girmez); resim içeren klasörleri döndürür.
-pub fn scan_tree(root: &Path, cancel: &AtomicBool, found: &AtomicUsize, ctx: &egui::Context) -> Vec<(PathBuf, usize)> {
+/// Klasör ağacını yinelemesiz dolaşır (sembolik bağlı klasörlere, `skip` listesindekilere ve .app paketlerine girmez);
+/// resim içeren klasörleri sıralı döndürür.
+pub fn scan_tree(
+    root: &Path,
+    skip: &[PathBuf],
+    cancel: &AtomicBool,
+    found: &AtomicUsize,
+    ctx: &egui::Context,
+) -> Vec<ScanItem> {
     use std::sync::atomic::Ordering::Relaxed;
-    let mut out: Vec<(PathBuf, usize)> = Vec::new();
+    let mut out: Vec<ScanItem> = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     let mut visited = 0usize;
     while let Some(dir) = stack.pop() {
@@ -319,6 +369,7 @@ pub fn scan_tree(root: &Path, cancel: &AtomicBool, found: &AtomicUsize, ctx: &eg
         }
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         let mut n = 0usize;
+        let mut first: Option<PathBuf> = None;
         for e in rd.filter_map(|e| e.ok()) {
             let name = e.file_name().to_string_lossy().to_string();
             if name.starts_with('.') {
@@ -327,20 +378,27 @@ pub fn scan_tree(root: &Path, cancel: &AtomicBool, found: &AtomicUsize, ctx: &eg
             let path = e.path();
             let Ok(ft) = e.file_type() else { continue };
             if ft.is_dir() {
-                if name.to_lowercase().ends_with(".photoslibrary") {
+                let lower = name.to_lowercase();
+                let is_pkg = [".photoslibrary", ".app", ".framework", ".bundle", ".plugin", ".kext"]
+                    .iter()
+                    .any(|ext| lower.ends_with(ext));
+                if is_pkg || skip.iter().any(|s| *s == path) {
                     continue;
                 }
                 stack.push(path);
             } else if (ft.is_file() || ft.is_symlink()) && is_image(&path) && path.is_file() {
                 n += 1;
+                if first.is_none() {
+                    first = Some(path);
+                }
             }
         }
-        if n > 0 {
+        if let Some(first) = first {
             found.fetch_add(n, Relaxed);
-            out.push((dir, n));
+            out.push(ScanItem { dir, count: n, first });
         }
     }
-    out.sort_by(|a, b| natural_cmp(&a.0.to_string_lossy(), &b.0.to_string_lossy()));
+    out.sort_by(|a, b| natural_cmp(&a.dir.to_string_lossy(), &b.dir.to_string_lossy()));
     out
 }
 

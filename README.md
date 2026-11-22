@@ -61,9 +61,10 @@ ya da uygulamaya **sağ tıklayıp → Aç** deyin.
 
 ## Kullanım
 
+- **Gezinme sınırı:** klasör gezgini yalnızca **ana dizin (ev klasörü)** ve altında çalışır; yol çubuğu ana dizinden başlar, ana dizinin üstüne çıkılamaz.
 - **Klasör gezgini (açılış ekranı):** uygulama **Pictures** klasöründe açılır. Üstteki çubukta **Geri / İleri / Yukarı / Pictures**, tıklanabilir yol ve **Klasör seç…** vardır; içerik her satırda **altı ön izleme** olacak şekilde dizilir. Klasöre tıklayınca içine girilir, **bir resme tıklayınca** görüntüleyici açılır. Görüntüleyiciden gezgine dönmek için araç çubuğundaki **Klasörler**, **Esc** ya da **⌘B**; gezginde **Backspace** üst klasöre çıkar. Bir klasörü pencereye sürükleyip bırakmak da gezgini oraya götürür.
-- **Tara:** gezgin çubuğundaki **Tara**, açık klasörü ve tüm alt dizinlerini tarar; bitince resim içeren klasörler altta sıralı kartlar olarak listelenir (kart = klasör + resim sayısı). Karta tıklayarak ya da **Önceki / Sonraki klasör** düğmeleriyle aralarında gezilir. Tarama sürerken düğme **Durdur** olur.
-- **Alt şerit:** küçük resim şeridi pencerenin tam genişliğini kaplar. Büyütme ve serbest döndürme kaydırıcıları resim alanının sağ üstüne sabittir.
+- **Tara:** gezgin çubuğundaki **Tara**, bulunduğunuz klasörden bağımsız olarak **ana dizini (ev klasörü)** ve tüm alt dizinlerini tarar; Sistem klasörleri (`Applications`, `Library`, `/System`, `/Library`, `/usr`, `/private`, `/Volumes` vb.) ve `.app`, `.framework`, `.bundle` gibi paketler taranmaz. Sonuçlar ana ekranda gösterilir: üstte ayrı bir **Uygulamalar** bölümü, altında resim içeren klasörler (ön izleme + resim sayısı, her satırda altı kart). Karta tıklayınca klasör açılır; üstteki satırdaki **Liste**, **Önceki klasör / Sonraki klasör** düğmeleriyle sıralı klasörler arasında gezilir. Tarama sürerken düğme **Durdur** olur.
+- **Alt şerit (görüntüleyici):** küçük resim şeridi pencerenin tam genişliğini kaplar. Büyütme ve serbest döndürme kaydırıcıları resim alanının sağ üstüne sabittir.
 - **Resim açma:** **⌘O** ya da araç çubuğundaki **Aç…**, resmi pencereye **sürükleyip bırakma**, ya da komut satırından `Deck resim.jpg`.
 - Açılan resimle aynı klasördeki tüm resimler alttaki şeritte (ada göre, sayıya duyarlı sıralı) listelenir; küçük resme tıklayarak geçiş yapılır.
 - **Klavye:** **← →** önceki/sonraki, **↑** sola döndür, **↓** sağa döndür, **⌘Z** geri al, **⌘S** kopya olarak kaydet, **⌘O** aç, **Esc** kırpmayı/kalemi kapatır (tam ekrandan çıkar).
