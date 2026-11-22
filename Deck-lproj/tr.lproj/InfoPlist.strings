@@ -1,0 +1,4 @@
+"NSDesktopFolderUsageDescription" = "Masaüstündeki resimleri göstermek için erişim gerekir.";
+"NSDocumentsFolderUsageDescription" = "Belgeler klasöründeki resimleri göstermek için erişim gerekir.";
+"NSDownloadsFolderUsageDescription" = "İndirilenler klasöründeki resimleri göstermek için erişim gerekir.";
+"NSRemovableVolumesUsageDescription" = "Harici disklerdeki resimleri göstermek için erişim gerekir.";

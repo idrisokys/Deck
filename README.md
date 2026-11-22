@@ -1,6 +1,6 @@
 # Deck
 
-macOS (Apple Silicon) için koyu temalı, tamamen Türkçe resim görüntüleyici. **Rust** ile yazıldı
+macOS (Apple Silicon) için koyu temalı, **Türkçe ve İngilizce** resim görüntüleyici. **Rust** ile yazıldı
 ([egui/eframe](https://github.com/emilk/egui) arayüzü + [image](https://github.com/image-rs/image) kütüphanesi).
 
 <p align="center"><img src="Deck-icon-1024.png" width="160" alt="Deck simgesi"></p>
@@ -16,11 +16,11 @@ macOS (Apple Silicon) için koyu temalı, tamamen Türkçe resim görüntüleyic
 │   ├── app.rs                         # Arayüz: araç çubuğu, resim alanı, kırpma, kalem, şerit, kaydırıcılar
 │   └── gallery.rs                     # Klasör tarama, resim çözme, önbellek, arka plan işçileri, kaydetme
 ├── Deck.icns                          # Uygulama simgesi
-├── Deck-icon-source.png               # Simgenin kaynak tasarımı (balıkçı teknesi)
-├── Deck-icon-1024.png                 # macOS ızgarasına oturtulmuş 1024 px simge
+├── Deck-icon-1024.png                 # macOS ızgarasına oturtulmuş 1024 px simge (derlemeye gömülür)
 ├── Deck-Info.plist                    # Uygulama bilgileri, izin metinleri
+├── Deck-lproj/                        # tr / en izin metinleri (InfoPlist.strings)
+├── src/lang.rs                        # Arayüz dili (Türkçe / English): seçim, kayıt, sistem dili
 ├── Deck-build.sh                      # Yerelde ve CI'da kullanılan derleme betiği (.app üretir)
-├── Deck-tools/Deck-make-icon.py       # Kaynak görselden .icns üreten betik (isteğe bağlı)
 ├── .gitignore
 └── README.md
 ```
@@ -61,6 +61,7 @@ ya da uygulamaya **sağ tıklayıp → Aç** deyin.
 
 ## Kullanım
 
+- **Dil / Language:** ilk açılışta sistem dili Türkçe ise arayüz Türkçe, değilse English açılır. Üst çubuktaki **EN / TR** düğmesi dili anında değiştirir; seçim bir sonraki açılışta hatırlanır.
 - **Gezinme sınırı:** klasör gezgini yalnızca **ana dizin (ev klasörü)** ve altında çalışır; yol çubuğu ana dizinden başlar, ana dizinin üstüne çıkılamaz.
 - **Klasör gezgini (açılış ekranı):** uygulama **Pictures** klasöründe açılır. Üstteki çubukta **Geri / İleri / Yukarı / Pictures**, tıklanabilir yol ve **Klasör seç…** vardır; içerik her satırda **altı ön izleme** olacak şekilde dizilir. Klasöre tıklayınca içine girilir, **bir resme tıklayınca** görüntüleyici açılır. Görüntüleyiciden gezgine dönmek için araç çubuğundaki **Klasörler**, **Esc** ya da **⌘B**; gezginde **Backspace** üst klasöre çıkar. Bir klasörü pencereye sürükleyip bırakmak da gezgini oraya götürür.
 - **Tara:** gezgin çubuğundaki **Tara**, bulunduğunuz klasörden bağımsız olarak **ana dizini (ev klasörü)** ve tüm alt dizinlerini tarar; Sistem klasörleri (`Applications`, `Library`, `/System`, `/Library`, `/usr`, `/private`, `/Volumes` vb.) ve `.app`, `.framework`, `.bundle` gibi paketler taranmaz. Sonuçlar ana ekranda gösterilir: resim içeren klasörler (ön izleme + resim sayısı, her satırda altı kart). Karta tıklayınca klasör açılır ve tarama sırasında yalnızca resimler listelenir (alt klasörler gösterilmez); üstteki satırdaki **Liste**, **Önceki klasör / Sonraki klasör** düğmeleriyle sıralı klasörler arasında gezilir. Tarama sürerken düğme **Durdur** olur.

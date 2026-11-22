@@ -2,6 +2,7 @@
 
 mod app;
 mod gallery;
+mod lang;
 
 use std::path::PathBuf;
 

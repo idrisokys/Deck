@@ -407,8 +407,8 @@ pub fn scan_tree(
 
 // ---------- Kaydetme / çöp ----------
 
-/// Resmi sormadan "ad kopya.uzantı" olarak aynı klasöre kaydeder.
-pub fn save_copy(src: &Path, img: RgbaImage) -> Result<PathBuf, String> {
+/// Resmi sormadan "ad kopya.uzantı" (İngilizce: "ad copy.uzantı") olarak aynı klasöre kaydeder.
+pub fn save_copy(src: &Path, img: RgbaImage, suffix: &str, fallback: &str) -> Result<PathBuf, String> {
     let ext0 = src.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     let ext = match ext0.as_str() {
         "png" | "jpg" | "jpeg" | "tif" | "tiff" | "bmp" | "gif" => ext0.clone(),
@@ -417,12 +417,12 @@ pub fn save_copy(src: &Path, img: RgbaImage) -> Result<PathBuf, String> {
     let base = src
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "resim".to_string());
+        .unwrap_or_else(|| fallback.to_string());
     let dir = src.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-    let mut dest = dir.join(format!("{base} kopya.{ext}"));
+    let mut dest = dir.join(format!("{base} {suffix}.{ext}"));
     let mut n = 2;
     while dest.exists() {
-        dest = dir.join(format!("{base} kopya {n}.{ext}"));
+        dest = dir.join(format!("{base} {suffix} {n}.{ext}"));
         n += 1;
     }
     match ext.as_str() {

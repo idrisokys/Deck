@@ -1,0 +1,4 @@
+"NSDesktopFolderUsageDescription" = "Access is needed to show the images on your Desktop.";
+"NSDocumentsFolderUsageDescription" = "Access is needed to show the images in your Documents folder.";
+"NSDownloadsFolderUsageDescription" = "Access is needed to show the images in your Downloads folder.";
+"NSRemovableVolumesUsageDescription" = "Access is needed to show the images on external drives.";

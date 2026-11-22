@@ -16,6 +16,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "target/$TARGET/release/Deck" "$APP/Contents/MacOS/Deck"
 cp Deck-Info.plist "$APP/Contents/Info.plist"   # paket içinde adı Info.plist olmak zorunda
 cp Deck.icns "$APP/Contents/Resources/Deck.icns"
+cp -R Deck-lproj/tr.lproj Deck-lproj/en.lproj "$APP/Contents/Resources/"   # Türkçe / İngilizce izin metinleri
 codesign --force --deep --sign - "$APP"
 
 echo "Hazır: $(pwd)/$APP"
