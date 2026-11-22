@@ -21,7 +21,10 @@ const PEN_RED: Color32 = Color32::from_rgb(255, 80, 80);
 const SLIDE_SECS: u64 = 3;
 const TOAST_MS: u64 = 2500;
 const MAX_UNDO: usize = 10;
-const ZOOM_BASE: f32 = 10.0; // büyütme çubuğu: %10 … %1000
+const ZOOM_BASE: f32 = 100.0; // büyütme çubuğu: %1 … %10000
+const TOP_BAR_H: f32 = 58.0; // üst çubuk yüksekliği
+const BAR_INNER: f32 = 46.0; // çerçeve boşluğu düşülmüş iç yükseklik
+const BTN_H: f32 = 40.0; // düğme yüksekliği
 const THUMB_CAP: usize = 600; // bellekte tutulan en çok küçük resim
 
 #[derive(Clone, Copy, PartialEq)]
@@ -98,7 +101,6 @@ pub struct DeckApp {
     scan_cancel: Arc<AtomicBool>,
     scan_found: Arc<AtomicUsize>,
     view_scan: bool, // ana ekranda tarama sonuçları gösterilsin mi
-    canvas_rect: Rect,
 
     files: Vec<PathBuf>,
     idx: usize,
@@ -127,7 +129,7 @@ pub struct DeckApp {
     undo: Vec<Arc<RgbaImage>>,
 
     // görünüm
-    zoom_v: f32, // -1..1 → 0,1x .. 10x (ortası 1x)
+    zoom_v: f32, // -1..1 → 0,01x .. 100x (ortası 1x)
     rot_v: f32,  // -180..180 derece
     pan: Vec2,
 
@@ -168,7 +170,6 @@ impl DeckApp {
             scan_cancel: Arc::new(AtomicBool::new(false)),
             scan_found: Arc::new(AtomicUsize::new(0)),
             view_scan: false,
-            canvas_rect: Rect::NOTHING,
             files: Vec::new(),
             idx: 0,
             cur: None,
@@ -707,82 +708,93 @@ impl DeckApp {
 
     // ---------- Araç çubuğu ----------
 
+    /// Üst çubuk (58 px): solda kaydırılabilir düğmeler; sağa sabit: Aç… + büyütme / döndürme kaydırıcıları.
     fn toolbar(&mut self, ctx: &Context, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            if tb(ui, "Klasörler", "Klasörlere dön (Esc / ⌘B)", false, None) {
-                self.show_browser(ctx);
-            }
-            ui.separator();
-            if tb(ui, "Önceki", "Önceki resim (←)", false, None) {
-                self.go(-1);
-            }
-            if tb(ui, "Sonraki", "Sonraki resim (→)", false, None) {
-                self.go(1);
-            }
-            ui.separator();
-            if tb(ui, "Sola", "Sola döndür (↑)", false, None) {
-                self.rot90(false);
-            }
-            if tb(ui, "Sağa", "Sağa döndür (↓)", false, None) {
-                self.rot90(true);
-            }
-            if tb(ui, "Yatay", "Yatay çevir", false, None) {
-                self.flip(true);
-            }
-            if tb(ui, "Dikey", "Dikey çevir", false, None) {
-                self.flip(false);
-            }
-            if tb(ui, "Kırp", "Kırp", self.crop, None) {
-                self.crop = !self.crop;
-                self.cn = def_crop();
-                self.dm = None;
-                if self.crop {
-                    self.pen = false;
-                    self.stroke.clear();
-                    self.reset_view();
-                }
-            }
-            if tb(ui, "Kalem", "Kırmızı kalem", self.pen, Some(PEN_RED)) {
-                self.pen = !self.pen;
-                self.stroke.clear();
-                if self.pen {
-                    self.crop = false;
-                    self.reset_view();
-                }
-            }
-            ui.add_enabled_ui(!self.undo.is_empty(), |ui| {
-                if tb(ui, "Geri al", "Geri al (⌘Z)", false, None) {
-                    self.undo_last();
-                }
+        const RIGHT_W: f32 = 410.0;
+        let w = ui.available_width();
+        ui.allocate_ui_with_layout(vec2(w, BAR_INNER), Layout::left_to_right(Align::Center), |ui| {
+            ui.spacing_mut().scroll = egui::style::ScrollStyle::floating();
+            let left_w = (ui.available_width() - RIGHT_W).max(120.0);
+            ui.allocate_ui_with_layout(vec2(left_w, BAR_INNER), Layout::left_to_right(Align::Center), |ui| {
+                egui::ScrollArea::horizontal().id_source("arac_dugmeleri").auto_shrink([false, false]).show(ui, |ui| {
+                    ui.horizontal_centered(|ui| {
+                        if tb(ui, "Klasörler", "Klasörlere dön (Esc / ⌘B)", false, None) {
+                            self.show_browser(ctx);
+                        }
+                        ui.separator();
+                        if tb(ui, "Önceki", "Önceki resim (←)", false, None) {
+                            self.go(-1);
+                        }
+                        if tb(ui, "Sonraki", "Sonraki resim (→)", false, None) {
+                            self.go(1);
+                        }
+                        ui.separator();
+                        if tb(ui, "Sola", "Sola döndür (↑)", false, None) {
+                            self.rot90(false);
+                        }
+                        if tb(ui, "Sağa", "Sağa döndür (↓)", false, None) {
+                            self.rot90(true);
+                        }
+                        if tb(ui, "Yatay", "Yatay çevir", false, None) {
+                            self.flip(true);
+                        }
+                        if tb(ui, "Dikey", "Dikey çevir", false, None) {
+                            self.flip(false);
+                        }
+                        if tb(ui, "Kırp", "Kırp", self.crop, None) {
+                            self.crop = !self.crop;
+                            self.cn = def_crop();
+                            self.dm = None;
+                            if self.crop {
+                                self.pen = false;
+                                self.stroke.clear();
+                                self.reset_view();
+                            }
+                        }
+                        if tb(ui, "Kalem", "Kırmızı kalem", self.pen, Some(PEN_RED)) {
+                            self.pen = !self.pen;
+                            self.stroke.clear();
+                            if self.pen {
+                                self.crop = false;
+                                self.reset_view();
+                            }
+                        }
+                        ui.add_enabled_ui(!self.undo.is_empty(), |ui| {
+                            if tb(ui, "Geri al", "Geri al (⌘Z)", false, None) {
+                                self.undo_last();
+                            }
+                        });
+                        if tb(ui, "Tam ekran", "Tam ekran (Esc ile çık)", self.fullscreen, None) {
+                            self.toggle_fullscreen(ctx);
+                        }
+                        if tb(ui, "Slayt", "Slayt gösterisi (3 sn)", self.play, None) {
+                            self.play = !self.play;
+                            self.last_slide = Instant::now();
+                            if self.play != self.fullscreen {
+                                self.toggle_fullscreen(ctx);
+                            }
+                        }
+                        ui.separator();
+                        if tb(ui, "Kaydet", "Kopya olarak kaydet (⌘S)", false, None) {
+                            self.save();
+                        }
+                        if tb(ui, "Çöp", "Çöp Kutusu'na at", false, None) {
+                            self.del();
+                        }
+                        if tb(ui, "Finder", "Finder'da göster", false, None) {
+                            if let Some(p) = self.files.get(self.idx) {
+                                let _ = std::process::Command::new("open").arg("-R").arg(p).spawn();
+                            }
+                        }
+                    });
+                });
             });
-            if tb(ui, "Tam ekran", "Tam ekran (Esc ile çık)", self.fullscreen, None) {
-                self.toggle_fullscreen(ctx);
-            }
-            if tb(ui, "Slayt", "Slayt gösterisi (3 sn)", self.play, None) {
-                self.play = !self.play;
-                self.last_slide = Instant::now();
-                if self.play != self.fullscreen {
-                    self.toggle_fullscreen(ctx);
-                }
-            }
             ui.separator();
-            if tb(ui, "Kaydet", "Kopya olarak kaydet (⌘S)", false, None) {
-                self.save();
-            }
-            if tb(ui, "Çöp", "Çöp Kutusu'na at", false, None) {
-                self.del();
-            }
-            if tb(ui, "Finder", "Finder'da göster", false, None) {
-                if let Some(p) = self.files.get(self.idx) {
-                    let _ = std::process::Command::new("open").arg("-R").arg(p).spawn();
-                }
-            }
             if tb(ui, "Aç…", "Resim aç (⌘O)", false, None) {
                 self.open_dialog();
             }
+            self.slider_ui(ui);
         });
-        ui.add_space(4.0);
     }
 
     // ---------- Alt şerit ----------
@@ -837,27 +849,6 @@ impl DeckApp {
         }
     }
 
-    /// Büyütme / serbest döndürme kaydırıcıları: resim alanının sağ üstüne sabitlenir.
-    fn slider_overlay(&mut self, ctx: &Context) {
-        let pos = if self.canvas_rect.is_positive() {
-            self.canvas_rect.right_top() + vec2(-12.0, 12.0)
-        } else {
-            ctx.screen_rect().right_top() + vec2(-12.0, 60.0)
-        };
-        egui::Area::new(egui::Id::new("gorunum_ayarlari"))
-            .fixed_pos(pos)
-            .pivot(Align2::RIGHT_TOP)
-            .order(Order::Foreground)
-            .show(ctx, |ui| {
-                egui::Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(18, 20, 22, 235))
-                    .stroke(Stroke::new(1.0, Color32::from_gray(60)))
-                    .rounding(10.0)
-                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-                    .show(ui, |ui| self.slider_ui(ui));
-            });
-    }
-
     /// Çizgi üzerinde küçük yuvarlak: sağa çek → büyüt / sağa döndür, sola çek → küçült / sola döndür.
     fn slider_ui(&mut self, ui: &mut egui::Ui) {
         let enabled = !(self.crop || self.pen);
@@ -872,7 +863,7 @@ impl DeckApp {
                     }
                     ui.label(RichText::new("küçült").small().weak());
                     let r = ui.add(egui::Slider::new(&mut self.zoom_v, -1.0..=1.0).show_value(false));
-                    if r.changed() && self.zoom_v.abs() < 0.04 {
+                    if r.changed() && self.zoom_v.abs() < 0.02 {
                         self.zoom_v = 0.0;
                     }
                     ui.label(RichText::new("büyüt").small().weak());
@@ -928,10 +919,9 @@ impl DeckApp {
         let at_pics = self.dir == pics;
         let scanning = self.scanning;
 
-        ui.add_space(4.0);
         ui.vertical_centered(|ui| {
             let w = ui.available_width().min(1000.0);
-            ui.allocate_ui_with_layout(vec2(w, 32.0), Layout::left_to_right(Align::Center), |ui| {
+            ui.allocate_ui_with_layout(vec2(w, BAR_INNER), Layout::left_to_right(Align::Center), |ui| {
                 ui.add_enabled_ui(can_back, |ui| {
                     if tb(ui, "Geri", "Önceki klasör", false, None) {
                         act = 1;
@@ -993,7 +983,6 @@ impl DeckApp {
                 });
             });
         });
-        ui.add_space(4.0);
 
         match act {
             1 => self.go_back(),
@@ -1446,7 +1435,6 @@ impl DeckApp {
         let avail = ui.available_size();
         let (resp, painter) = ui.allocate_painter(avail, Sense::click_and_drag());
         let rect = resp.rect;
-        self.canvas_rect = rect;
 
         let (Some(tex), Some(cur)) = (self.tex.clone(), self.cur.clone()) else {
             let text = if self.failed {
@@ -1540,7 +1528,10 @@ impl eframe::App for DeckApp {
 
         match self.screen {
             Screen::Browse => {
-                egui::TopBottomPanel::top("gezgin").show(ctx, |ui| self.browser_bar(ui));
+                egui::TopBottomPanel::top("gezgin")
+                    .exact_height(TOP_BAR_H)
+                    .frame(bar_frame())
+                    .show(ctx, |ui| self.browser_bar(ui));
                 if self.scanning {
                     ctx.request_repaint_after(Duration::from_millis(150));
                 }
@@ -1568,7 +1559,10 @@ impl eframe::App for DeckApp {
                     });
             }
             Screen::Viewer => {
-                egui::TopBottomPanel::top("araclar").show(ctx, |ui| self.toolbar(ctx, ui));
+                egui::TopBottomPanel::top("araclar")
+                    .exact_height(TOP_BAR_H)
+                    .frame(bar_frame())
+                    .show(ctx, |ui| self.toolbar(ctx, ui));
                 egui::TopBottomPanel::bottom("serit")
                     .exact_height(110.0)
                     .frame(egui::Frame::none().fill(Color32::from_rgb(28, 31, 33)))
@@ -1576,7 +1570,6 @@ impl eframe::App for DeckApp {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::none().fill(BG))
                     .show(ctx, |ui| self.canvas(ctx, ui));
-                self.slider_overlay(ctx);
             }
         }
     }
@@ -1610,6 +1603,11 @@ fn fit_rect(r: Rect, w: f32, h: f32) -> Rect {
     Rect::from_center_size(r.center(), vec2(w * k, h * k))
 }
 
+/// Üst çubukların ortak çerçevesi
+fn bar_frame() -> egui::Frame {
+    egui::Frame::none().fill(Color32::from_rgb(28, 31, 33)).inner_margin(egui::Margin::symmetric(10.0, 6.0))
+}
+
 /// Kartın altına tek satır, ortalı, sığmazsa "…" ile kısaltılan ad yazar
 fn label_under(painter: &egui::Painter, tile: Rect, text: String, width: f32) {
     let mut job = egui::text::LayoutJob::simple(text, FontId::proportional(12.5), Color32::from_gray(205), width);
@@ -1634,7 +1632,7 @@ fn tb(ui: &mut egui::Ui, label: &str, tip: &str, on: bool, color: Option<Color32
     if let Some(c) = color {
         t = t.color(c);
     }
-    ui.add(egui::Button::new(t).selected(on).min_size(vec2(0.0, 30.0))).on_hover_text(tip).clicked()
+    ui.add(egui::Button::new(t).selected(on).min_size(vec2(0.0, BTN_H))).on_hover_text(tip).clicked()
 }
 
 fn reset_label(ui: &mut egui::Ui, label: &str, tip: &str) -> bool {
