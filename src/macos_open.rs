@@ -111,3 +111,85 @@ pub fn install(ctx: &eframe::egui::Context) {
     #[cfg(not(target_os = "macos"))]
     let _ = ctx;
 }
+
+// ---------- Varsayılan resim açıcı olarak ayarlama ----------
+
+#[cfg(target_os = "macos")]
+mod default_handler {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_void};
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringCreateWithCString(alloc: *const c_void, c: *const c_char, enc: u32) -> *const c_void;
+        fn CFRelease(cf: *const c_void);
+    }
+    #[link(name = "CoreServices", kind = "framework")]
+    extern "C" {
+        fn LSSetDefaultRoleHandlerForContentType(content_type: *const c_void, role: u32, handler: *const c_void) -> i32;
+    }
+
+    const UTF8: u32 = 0x0800_0100;
+    const ROLES_ALL: u32 = 0xFFFF_FFFF;
+    const BUNDLE_ID: &str = "com.idris.deck";
+    /// Deck-Info.plist içindeki belge türleriyle aynı
+    const UTIS: &[&str] = &[
+        "public.jpeg",
+        "public.png",
+        "com.compuserve.gif",
+        "com.microsoft.bmp",
+        "public.tiff",
+        "org.webmproject.webp",
+        "com.microsoft.ico",
+        "com.truevision.tga-image",
+    ];
+
+    fn cfstr(s: &str) -> *const c_void {
+        let c = CString::new(s).unwrap_or_default();
+        unsafe { CFStringCreateWithCString(std::ptr::null(), c.as_ptr(), UTF8) }
+    }
+
+    pub fn set_all() {
+        let handler = cfstr(BUNDLE_ID);
+        for uti in UTIS {
+            let ct = cfstr(uti);
+            unsafe {
+                LSSetDefaultRoleHandlerForContentType(ct, ROLES_ALL, handler);
+                CFRelease(ct);
+            }
+        }
+        unsafe { CFRelease(handler) };
+    }
+}
+
+/// İlk açılışta bir kez sorar: Deck varsayılan resim açıcı olsun mu? (macOS dışında hiçbir şey yapmaz)
+pub fn offer_default(tr: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+        let dir = home.join("Library").join("Application Support").join("Deck");
+        let marker = dir.join("default_asked");
+        if marker.exists() {
+            return;
+        }
+        let (title, text) = if tr {
+            ("Deck varsayılan resim açıcı olsun mu?", "Tüm resim biçimleri (JPEG, PNG, GIF, WebP, TIFF, BMP…) çift tıklayınca Deck ile açılsın mı? Bunu daha sonra Finder'da Bilgi Al ▸ Birlikte aç bölümünden değiştirebilirsiniz.")
+        } else {
+            ("Make Deck your default image viewer?", "Open all image formats (JPEG, PNG, GIF, WebP, TIFF, BMP…) with Deck when double-clicked? You can change this later in Finder via Get Info ▸ Open with.")
+        };
+        let yes = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title(title)
+            .set_description(text)
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show()
+            == rfd::MessageDialogResult::Yes;
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&marker, if yes { "yes" } else { "no" });
+        if yes {
+            default_handler::set_all();
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = tr;
+}

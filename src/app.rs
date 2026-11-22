@@ -1508,6 +1508,9 @@ impl DeckApp {
 impl eframe::App for DeckApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.pump(ctx);
+        // İlk açılışta (yalnızca bir kez) varsayılan resim açıcı olmayı sor
+        static ASKED: std::sync::Once = std::sync::Once::new();
+        ASKED.call_once(|| crate::macos_open::offer_default(self.lang == Lang::Tr));
         self.handle_drop(ctx);
         self.handle_keys(ctx);
         self.tick_slideshow(ctx);
