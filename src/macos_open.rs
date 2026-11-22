@@ -1,6 +1,6 @@
 //! macOS: Finder'dan çift tık / "Birlikte aç" / Dock simgesine sürükleme.
-//! Bu yollarla gelen dosyalar komut satırı argümanı olarak değil, "dosyayı aç"
-//! Apple Event'i ('aevt'/'odoc') olarak gelir; burada yakalanıp kuyruğa konur.
+//! Bu yollarla gelen dosyalar komut satırı argümanı olarak değil, macOS tarafından uygulama
+//! delegesinin `application:openFiles:` yöntemiyle bildirilir; burada yakalanıp kuyruğa konur.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -20,68 +20,21 @@ mod imp {
     use std::path::PathBuf;
     use std::sync::OnceLock;
 
-    use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, Sel};
+    use objc2::runtime::{AnyClass, AnyObject, Sel};
     use objc2::{msg_send, sel};
 
     static CTX: OnceLock<eframe::egui::Context> = OnceLock::new();
-
-    const AE_CLASS: u32 = 0x6165_7674; // 'aevt'
-    const AE_OPEN_DOCS: u32 = 0x6F64_6F63; // 'odoc'
-    const KEY_DIRECT_OBJECT: u32 = 0x2D2D_2D2D; // '----'
-
-    unsafe fn path_of(desc: *mut AnyObject) -> Option<PathBuf> {
-        if desc.is_null() {
-            return None;
-        }
-        let url: *mut AnyObject = msg_send![desc, fileURLValue];
-        if url.is_null() {
-            return None;
-        }
-        let ns: *mut AnyObject = msg_send![url, path];
-        if ns.is_null() {
-            return None;
-        }
-        let c: *const c_char = msg_send![ns, UTF8String];
-        if c.is_null() {
-            return None;
-        }
-        Some(PathBuf::from(CStr::from_ptr(c).to_string_lossy().into_owned()))
-    }
-
-    extern "C" fn handle_open(_this: *mut AnyObject, _cmd: Sel, event: *mut AnyObject, _reply: *mut AnyObject) {
-        if event.is_null() {
-            return;
-        }
-        let mut found: Vec<PathBuf> = Vec::new();
-        unsafe {
-            let list: *mut AnyObject = msg_send![event, paramDescriptorForKeyword: KEY_DIRECT_OBJECT];
-            if !list.is_null() {
-                let n: isize = msg_send![list, numberOfItems];
-                if n == 0 {
-                    found.extend(path_of(list));
-                }
-                for i in 1..=n {
-                    let item: *mut AnyObject = msg_send![list, descriptorAtIndex: i];
-                    found.extend(path_of(item));
-                }
-            }
-        }
-        if found.is_empty() {
-            return;
-        }
-        if let Ok(mut q) = QUEUE.lock() {
-            q.extend(found);
-        }
-        if let Some(ctx) = CTX.get() {
-            ctx.request_repaint();
-        }
-    }
 
     #[link(name = "objc", kind = "dylib")]
     extern "C" {
         fn class_addMethod(cls: *const std::ffi::c_void, name: *const std::ffi::c_void, imp: *const std::ffi::c_void, types: *const c_char) -> i8;
         fn object_getClass(obj: *const std::ffi::c_void) -> *const std::ffi::c_void;
+        fn class_getInstanceMethod(cls: *const std::ffi::c_void, name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+        fn method_setImplementation(m: *mut std::ffi::c_void, imp: *const std::ffi::c_void) -> *const std::ffi::c_void;
     }
+
+    /// `-[NSApplication setDelegate:]` için özgün gerçekleme
+    static ORIG_SET_DELEGATE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
     /// NSApplicationDelegate: `application:openFiles:` (macOS'un varsayılan "aç" işleyicisi bunu çağırır)
     extern "C" fn delegate_open_files(_this: *mut AnyObject, _cmd: Sel, app: *mut AnyObject, files: *mut AnyObject) {
@@ -116,14 +69,8 @@ mod imp {
         }
     }
 
-    /// winit'in uygulama delegesine `application:openFiles:` yöntemini çalışma anında ekler.
-    unsafe fn add_delegate_method() {
-        let Some(app_cls) = AnyClass::get("NSApplication") else { return };
-        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
-        if app.is_null() {
-            return;
-        }
-        let delegate: *mut AnyObject = msg_send![app, delegate];
+    /// Verilen delegenin sınıfına `application:openFiles:` yöntemini ekler (zaten varsa dokunmaz).
+    unsafe fn add_open_files_to(delegate: *mut AnyObject) {
         if delegate.is_null() {
             return;
         }
@@ -137,31 +84,49 @@ mod imp {
         class_addMethod(cls, sel_ptr, imp as *const std::ffi::c_void, b"v@:@@\0".as_ptr() as *const c_char);
     }
 
-    /// Apple Event işleyicisini eframe/winit pencere döngüsü başlamadan kaydet.
-    /// Finder, uygulama kapalıyken belge açma olayını başlangıçta gönderebilir.
+    /// Uygulama zaten çalışıyorsa: şu anki delegeye yöntemi ekler.
+    unsafe fn add_delegate_method() {
+        let Some(app_cls) = AnyClass::get("NSApplication") else { return };
+        let app: *mut AnyObject = msg_send![app_cls, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let delegate: *mut AnyObject = msg_send![app, delegate];
+        add_open_files_to(delegate);
+    }
+
+    /// winit delegesini atadığı anda (finishLaunching'den ÖNCE) yöntemi ekler.
+    /// macOS, uygulama kapalıyken açılan dosyayı `applicationDidFinishLaunching`'den önce
+    /// `application:openFiles:` ile bildirir; yöntem o ana kadar yoksa "biçimindeki dosyaları açamaz" hatası çıkar.
+    extern "C" fn set_delegate_hook(this: *mut AnyObject, cmd: Sel, delegate: *mut AnyObject) {
+        unsafe {
+            add_open_files_to(delegate);
+            let orig = ORIG_SET_DELEGATE.load(std::sync::atomic::Ordering::SeqCst);
+            if orig != 0 {
+                let f: extern "C" fn(*mut AnyObject, Sel, *mut AnyObject) = std::mem::transmute(orig);
+                f(this, cmd, delegate);
+            }
+        }
+    }
+
+    unsafe fn hook_set_delegate() {
+        let Some(app_cls) = AnyClass::get("NSApplication") else { return };
+        let sel = sel!(setDelegate:);
+        let sel_ptr: *const std::ffi::c_void = std::mem::transmute::<Sel, *const std::ffi::c_void>(sel);
+        let m = class_getInstanceMethod(app_cls as *const AnyClass as *const std::ffi::c_void, sel_ptr);
+        if m.is_null() {
+            return;
+        }
+        let hook = set_delegate_hook as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject);
+        let old = method_setImplementation(m, hook as *const std::ffi::c_void);
+        ORIG_SET_DELEGATE.store(old as usize, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Pencere/eframe başlamadan önce çağrılır: delege atanırken `application:openFiles:` eklenir.
     pub fn install_open_event_handler() {
         static INSTALLED: OnceLock<()> = OnceLock::new();
         let _ = INSTALLED.get_or_init(|| unsafe {
-            let Some(superclass) = AnyClass::get("NSObject") else { return };
-            let Some(mut builder) = ClassBuilder::new("DeckOpenHandler", superclass) else { return };
-            builder.add_method(
-                sel!(handleOpenEvent:withReplyEvent:),
-                handle_open as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject),
-            );
-            let cls = builder.register();
-            let handler: *mut AnyObject = msg_send![cls, new]; // AppleEventManager için canlı tutulur
-            let Some(mgr_cls) = AnyClass::get("NSAppleEventManager") else { return };
-            let mgr: *mut AnyObject = msg_send![mgr_cls, sharedAppleEventManager];
-            if mgr.is_null() || handler.is_null() {
-                return;
-            }
-            let _: () = msg_send![
-                mgr,
-                setEventHandler: handler,
-                andSelector: sel!(handleOpenEvent:withReplyEvent:),
-                forEventClass: AE_CLASS,
-                andEventID: AE_OPEN_DOCS
-            ];
+            hook_set_delegate();
         });
     }
 
@@ -171,7 +136,7 @@ mod imp {
     }
 }
 
-/// Apple Event kaydını pencere/eframe başlamadan önce çağır.
+/// Pencere/eframe başlamadan önce çağır (macOS dosya açma bildirimini yakalamak için).
 pub fn install_open_event_handler() {
     #[cfg(target_os = "macos")]
     imp::install_open_event_handler();
