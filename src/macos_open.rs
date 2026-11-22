@@ -48,7 +48,7 @@ mod imp {
         Some(PathBuf::from(CStr::from_ptr(c).to_string_lossy().into_owned()))
     }
 
-    extern "C" fn handle_open(_this: &AnyObject, _cmd: Sel, event: *mut AnyObject, _reply: *mut AnyObject) {
+    extern "C" fn handle_open(_this: *mut AnyObject, _cmd: Sel, event: *mut AnyObject, _reply: *mut AnyObject) {
         if event.is_null() {
             return;
         }
@@ -84,7 +84,7 @@ mod imp {
             let Some(mut builder) = ClassBuilder::new("DeckOpenHandler", superclass) else { return };
             builder.add_method(
                 sel!(handleOpenEvent:withReplyEvent:),
-                handle_open as extern "C" fn(&AnyObject, Sel, *mut AnyObject, *mut AnyObject),
+                handle_open as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject),
             );
             let cls = builder.register();
             let handler: *mut AnyObject = msg_send![cls, new]; // bilerek serbest bırakılmaz
