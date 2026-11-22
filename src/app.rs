@@ -1,18 +1,18 @@
 //! Deck arayüzü (egui): araç çubuğu, resim alanı, kırpma, kırmızı kalem, alt şerit ve kaydırıcılar.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, pos2, vec2, Align, Align2, Color32, Context, FontId, Key, Modifiers, Pos2, Rect, RichText, Sense,
-    Shape, Stroke, TextureHandle, TextureOptions, Vec2,
+    self, pos2, vec2, Align, Align2, Color32, Context, FontId, Key, Layout, Modifiers, Order, Pos2, Rect,
+    RichText, Sense, Shape, Stroke, TextureHandle, TextureOptions, Vec2,
 };
 use image::{imageops, RgbaImage};
 
-use crate::gallery::{self, Cache, Msg, Workers};
+use crate::gallery::{self, Cache, Entry, Msg, Workers};
 
 const BG: Color32 = Color32::from_rgb(23, 26, 28);
 const BLUE: Color32 = Color32::from_rgb(10, 132, 255);
@@ -20,6 +20,37 @@ const PEN_RED: Color32 = Color32::from_rgb(255, 80, 80);
 const SLIDE_SECS: u64 = 3;
 const TOAST_MS: u64 = 2500;
 const MAX_UNDO: usize = 10;
+const THUMB_CAP: usize = 600; // bellekte tutulan en çok küçük resim
+
+#[derive(Clone, Copy, PartialEq)]
+enum Screen {
+    Browse, // klasör gezgini (açılış ekranı)
+    Viewer, // resim görüntüleyici
+}
+
+/// Başlangıç klasörü: ~/Pictures (yoksa ev klasörü)
+fn pictures_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    match home {
+        Some(h) => {
+            let p = h.join("Pictures");
+            if p.is_dir() {
+                p
+            } else {
+                h
+            }
+        }
+        None => PathBuf::from("."),
+    }
+}
+
+fn parent_dir(p: &Path) -> PathBuf {
+    let d = match p.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    std::fs::canonicalize(&d).unwrap_or(d)
+}
 
 fn def_crop() -> Rect {
     Rect::from_min_max(pos2(0.1, 0.1), pos2(0.9, 0.9))
@@ -37,6 +68,16 @@ struct CropMode {
 pub struct DeckApp {
     workers: Workers,
     rx: Receiver<Msg>,
+
+    // klasör gezgini
+    screen: Screen,
+    pics: PathBuf, // başlangıç klasörü (Pictures)
+    dir: PathBuf,
+    entries: Vec<Entry>,
+    listing: bool,
+    dir_err: Option<String>,
+    hist_back: Vec<PathBuf>,
+    hist_fwd: Vec<PathBuf>,
 
     files: Vec<PathBuf>,
     idx: usize,
@@ -88,6 +129,14 @@ impl DeckApp {
         let mut app = DeckApp {
             workers,
             rx,
+            screen: Screen::Browse,
+            pics: pictures_dir(),
+            dir: pictures_dir(),
+            entries: Vec::new(),
+            listing: true,
+            dir_err: None,
+            hist_back: Vec::new(),
+            hist_fwd: Vec::new(),
             files: Vec::new(),
             idx: 0,
             cur: None,
@@ -116,8 +165,9 @@ impl DeckApp {
             last_slide: Instant::now(),
             toast: None,
         };
-        if let Some(p) = start {
-            app.open(p);
+        match start {
+            Some(p) => app.open(p),
+            None => app.workers.list_dir(app.dir.clone()),
         }
         app
     }
@@ -126,6 +176,7 @@ impl DeckApp {
 
     /// Resim hemen açılır; klasördeki diğer resimler arka planda listelenir.
     fn open(&mut self, path: PathBuf) {
+        self.screen = Screen::Viewer;
         self.files = vec![path.clone()];
         self.idx = 0;
         self.cur = None;
@@ -216,9 +267,35 @@ impl DeckApp {
                 Msg::Thumb(p, ci) => {
                     let t = ctx.load_texture(format!("t:{}", p.display()), ci, TextureOptions::LINEAR);
                     self.thumbs.insert(p, t);
+                    if self.thumbs.len() > THUMB_CAP {
+                        self.thumbs.clear();
+                        self.thumb_req.clear();
+                    }
+                }
+                Msg::Dir(d, r) => {
+                    if d == self.dir {
+                        self.listing = false;
+                        match r {
+                            Ok(v) => {
+                                self.entries = v;
+                                self.dir_err = None;
+                            }
+                            Err(e) => {
+                                self.entries.clear();
+                                self.dir_err = Some(e);
+                            }
+                        }
+                    }
                 }
                 Msg::Siblings(list) => {
                     let keep = self.files.get(self.idx).cloned();
+                    // Eski bir klasörden gecikmiş liste geldiyse yok say
+                    let ok = keep
+                        .as_ref()
+                        .map_or(false, |k| list.iter().any(|f| f.file_name() == k.file_name()));
+                    if !ok {
+                        continue;
+                    }
                     self.files = list;
                     self.idx = keep
                         .and_then(|k| self.files.iter().position(|f| f.file_name() == k.file_name()))
@@ -338,6 +415,8 @@ impl DeckApp {
             self.cur = None;
             self.cur_path = None;
             self.tex = None;
+            self.screen = Screen::Browse;
+            self.workers.list_dir(self.dir.clone());
         } else {
             self.idx = self.idx.min(self.files.len() - 1);
             self.load_current();
@@ -374,17 +453,107 @@ impl DeckApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.fullscreen));
     }
 
+    // ---------- Klasör gezgini eylemleri ----------
+
+    fn navigate(&mut self, dir: PathBuf, record: bool) {
+        if record && dir != self.dir {
+            self.hist_back.push(self.dir.clone());
+            self.hist_fwd.clear();
+        }
+        self.dir = dir.clone();
+        self.entries.clear();
+        self.listing = true;
+        self.dir_err = None;
+        self.thumbs.clear();
+        self.thumb_req.clear();
+        self.workers.list_dir(dir);
+    }
+
+    fn go_back(&mut self) {
+        if let Some(d) = self.hist_back.pop() {
+            self.hist_fwd.push(self.dir.clone());
+            self.navigate(d, false);
+        }
+    }
+
+    fn go_fwd(&mut self) {
+        if let Some(d) = self.hist_fwd.pop() {
+            self.hist_back.push(self.dir.clone());
+            self.navigate(d, false);
+        }
+    }
+
+    fn go_up(&mut self) {
+        if let Some(p) = self.dir.parent().filter(|p| !p.as_os_str().is_empty()).map(|p| p.to_path_buf()) {
+            self.navigate(p, true);
+        }
+    }
+
+    /// Görüntüleyiciden gezgine dön (açık resmin klasörüne gider, listeyi yeniler).
+    fn show_browser(&mut self, ctx: &Context) {
+        self.play = false;
+        if self.fullscreen {
+            self.fullscreen = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        }
+        self.screen = Screen::Browse;
+        if let Some(p) = self.files.get(self.idx).cloned() {
+            if p.parent() != Some(self.dir.as_path()) {
+                let d = parent_dir(&p);
+                if d != self.dir {
+                    self.navigate(d, true);
+                    return;
+                }
+            }
+        }
+        self.workers.list_dir(self.dir.clone());
+    }
+
+    /// Gezginde bir resme tıklanınca: klasördeki resimler şeride dizilir, tıklanan açılır.
+    fn open_from_browser(&mut self, n: usize) {
+        let Some(target) = self.entries.get(n).map(|e| e.path.clone()) else { return };
+        let imgs: Vec<PathBuf> = self.entries.iter().filter(|e| !e.is_dir).map(|e| e.path.clone()).collect();
+        let idx = imgs.iter().position(|p| *p == target).unwrap_or(0);
+        self.files = imgs;
+        self.idx = idx;
+        self.cur = None;
+        self.cur_path = None;
+        self.tex = None;
+        self.failed = false;
+        self.reset_edit();
+        self.screen = Screen::Viewer;
+        self.scroll_cur = true;
+        self.load_current();
+    }
+
     // ---------- Girdiler ----------
 
     fn handle_drop(&mut self, ctx: &Context) {
         let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-        if let Some(p) = dropped.into_iter().filter_map(|f| f.path).find(|p| p.is_file()) {
-            self.open(p);
+        if let Some(p) = dropped.into_iter().filter_map(|f| f.path).find(|p| p.is_file() || p.is_dir()) {
+            if p.is_dir() {
+                self.screen = Screen::Browse;
+                self.navigate(p, true);
+            } else {
+                self.open(p);
+            }
         }
     }
 
     fn handle_keys(&mut self, ctx: &Context) {
-        let (left, right, up, down, esc, z, o, s) = ctx.input_mut(|i| {
+        if self.screen == Screen::Browse {
+            let (o, bs) = ctx.input_mut(|i| {
+                (i.consume_key(Modifiers::COMMAND, Key::O), i.consume_key(Modifiers::NONE, Key::Backspace))
+            });
+            if o {
+                self.open_dialog();
+            }
+            if bs {
+                self.go_up();
+            }
+            return;
+        }
+        let (left, right, up, down, esc, z, o, s, b) = ctx.input_mut(|i| {
             (
                 i.consume_key(Modifiers::NONE, Key::ArrowLeft),
                 i.consume_key(Modifiers::NONE, Key::ArrowRight),
@@ -394,6 +563,7 @@ impl DeckApp {
                 i.consume_key(Modifiers::COMMAND, Key::Z),
                 i.consume_key(Modifiers::COMMAND, Key::O),
                 i.consume_key(Modifiers::COMMAND, Key::S),
+                i.consume_key(Modifiers::COMMAND, Key::B),
             )
         });
         if left {
@@ -418,7 +588,14 @@ impl DeckApp {
                 self.fullscreen = false;
                 self.play = false;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+            } else {
+                self.show_browser(ctx); // başka açık bir şey yoksa klasörlere dön
+                return;
             }
+        }
+        if b {
+            self.show_browser(ctx);
+            return;
         }
         if z {
             self.undo_last();
@@ -432,7 +609,7 @@ impl DeckApp {
     }
 
     fn tick_slideshow(&mut self, ctx: &Context) {
-        if !self.play || self.files.len() < 2 {
+        if self.screen != Screen::Viewer || !self.play || self.files.len() < 2 {
             return;
         }
         let d = Duration::from_secs(SLIDE_SECS);
@@ -451,6 +628,10 @@ impl DeckApp {
     fn toolbar(&mut self, ctx: &Context, ui: &mut egui::Ui) {
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
+            if tb(ui, "Klasörler", "Klasörlere dön (Esc / ⌘B)", false, None) {
+                self.show_browser(ctx);
+            }
+            ui.separator();
             if tb(ui, "Önceki", "Önceki resim (←)", false, None) {
                 self.go(-1);
             }
@@ -524,55 +705,71 @@ impl DeckApp {
 
     // ---------- Alt şerit ----------
 
+    /// Küçük resim şeridi: pencerenin tam genişliğini ve şerit panelinin tam yüksekliğini kaplar.
     fn bottom_ui(&mut self, ui: &mut egui::Ui) {
         let mut click: Option<usize> = None;
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            let w = (ui.available_width() - 330.0).max(100.0);
-            ui.allocate_ui(vec2(w, 96.0), |ui| {
-                egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 14.0;
-                        for n in 0..self.files.len() {
-                            let (rect, resp) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::click());
-                            if ui.is_rect_visible(rect) {
-                                let p = self.files[n].clone();
-                                if let Some(t) = self.thumbs.get(&p) {
-                                    let sz = t.size_vec2();
-                                    let k = (80.0 / sz.x).min(80.0 / sz.y);
-                                    ui.painter().image(
-                                        t.id(),
-                                        Rect::from_center_size(rect.center(), sz * k),
-                                        Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                                        Color32::WHITE,
-                                    );
-                                } else {
-                                    ui.painter().rect_filled(rect, 4.0, Color32::from_gray(40));
-                                    if self.thumb_req.insert(p.clone()) {
-                                        let _ = self.workers.thumb_tx.send(p);
-                                    }
-                                }
-                            }
-                            if n == self.idx {
-                                ui.painter().rect_stroke(rect.expand(2.0), 6.0, Stroke::new(3.0, BLUE));
-                                if self.scroll_cur {
-                                    ui.scroll_to_rect(rect, Some(Align::Center));
-                                }
-                            }
-                            if resp.clicked() {
-                                click = Some(n);
+        let h = ui.available_height();
+        let top = ui.max_rect().top();
+        ui.painter().hline(ui.max_rect().x_range(), top, Stroke::new(1.0, Color32::from_gray(52)));
+        let pad = ((h - 80.0) / 2.0 - 4.0).max(0.0);
+        egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
+            ui.add_space(pad);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 14.0;
+                ui.add_space(8.0);
+                for n in 0..self.files.len() {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(80.0, 80.0), Sense::click());
+                    if ui.is_rect_visible(rect) {
+                        let p = self.files[n].clone();
+                        if let Some(t) = self.thumbs.get(&p) {
+                            let sz = t.size_vec2();
+                            let k = (80.0 / sz.x).min(80.0 / sz.y);
+                            ui.painter().image(
+                                t.id(),
+                                Rect::from_center_size(rect.center(), sz * k),
+                                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        } else {
+                            ui.painter().rect_filled(rect, 4.0, Color32::from_gray(40));
+                            if self.thumb_req.insert(p.clone()) {
+                                let _ = self.workers.thumb_tx.send(p);
                             }
                         }
-                        self.scroll_cur = false;
-                    });
-                });
+                    }
+                    if n == self.idx {
+                        ui.painter().rect_stroke(rect.expand(2.0), 6.0, Stroke::new(3.0, BLUE));
+                        if self.scroll_cur {
+                            ui.scroll_to_rect(rect, Some(Align::Center));
+                        }
+                    }
+                    if resp.clicked() {
+                        click = Some(n);
+                    }
+                }
+                self.scroll_cur = false;
+                // Sağ alttaki kaydırıcıların altında kalan küçük resimler de görülebilsin
+                ui.add_space(360.0);
             });
-            ui.separator();
-            self.slider_ui(ui);
         });
         if let Some(n) = click {
             self.show_idx(n);
         }
+    }
+
+    /// Büyütme / serbest döndürme kaydırıcıları: şeridin üstünde, sağ altta yüzer.
+    fn slider_overlay(&mut self, ctx: &Context) {
+        egui::Area::new(egui::Id::new("gorunum_ayarlari"))
+            .anchor(Align2::RIGHT_BOTTOM, vec2(-14.0, -14.0))
+            .order(Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(Color32::from_rgba_unmultiplied(18, 20, 22, 235))
+                    .stroke(Stroke::new(1.0, Color32::from_gray(60)))
+                    .rounding(10.0)
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| self.slider_ui(ui));
+            });
     }
 
     /// Çizgi üzerinde küçük yuvarlak: sağa çek → büyüt / sağa döndür, sola çek → küçült / sola döndür.
@@ -609,6 +806,204 @@ impl DeckApp {
                 });
             });
         });
+    }
+
+    // ---------- Klasör gezgini ----------
+
+    /// Üstteki gezinme çubuğu: geri / ileri / yukarı / Pictures + tıklanabilir yol.
+    fn browser_bar(&mut self, ui: &mut egui::Ui) {
+        let pics = self.pics.clone();
+        let mut act = 0u8; // 1 geri, 2 ileri, 3 yukarı, 4 Pictures, 5 klasör seç, 6 resim aç
+        let mut nav: Option<PathBuf> = None;
+
+        // Yol parçaları
+        let mut crumbs: Vec<(String, PathBuf)> = Vec::new();
+        let mut acc = PathBuf::new();
+        for c in self.dir.components() {
+            acc.push(c.as_os_str());
+            let label = match c {
+                Component::RootDir => "Disk".to_string(),
+                other => other.as_os_str().to_string_lossy().to_string(),
+            };
+            crumbs.push((label, acc.clone()));
+        }
+        let last = crumbs.len().saturating_sub(1);
+        let can_back = !self.hist_back.is_empty();
+        let can_fwd = !self.hist_fwd.is_empty();
+        let can_up = self.dir.parent().map_or(false, |p| !p.as_os_str().is_empty());
+        let at_pics = self.dir == pics;
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(can_back, |ui| {
+                if tb(ui, "Geri", "Önceki klasör", false, None) {
+                    act = 1;
+                }
+            });
+            ui.add_enabled_ui(can_fwd, |ui| {
+                if tb(ui, "İleri", "Sonraki klasör", false, None) {
+                    act = 2;
+                }
+            });
+            ui.add_enabled_ui(can_up, |ui| {
+                if tb(ui, "Yukarı", "Üst klasör (Backspace)", false, None) {
+                    act = 3;
+                }
+            });
+            if tb(ui, "Pictures", "Pictures klasörüne git", at_pics, None) {
+                act = 4;
+            }
+            ui.separator();
+
+            let w = (ui.available_width() - 210.0).max(120.0);
+            ui.allocate_ui(vec2(w, 30.0), |ui| {
+                egui::ScrollArea::horizontal()
+                    .id_source("yol_cubugu")
+                    .stick_to_right(true)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for (i, (label, path)) in crumbs.iter().enumerate() {
+                                if i > 0 {
+                                    ui.label(RichText::new(">").weak());
+                                }
+                                let mut t = RichText::new(label.as_str()).size(15.0);
+                                if i == last {
+                                    t = t.color(BLUE).strong();
+                                }
+                                if ui.add(egui::Button::new(t).frame(false)).clicked() && i != last {
+                                    nav = Some(path.clone());
+                                }
+                            }
+                        });
+                    });
+            });
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if tb(ui, "Aç…", "Resim aç (⌘O)", false, None) {
+                    act = 6;
+                }
+                if tb(ui, "Klasör seç…", "Başka bir klasöre git", false, None) {
+                    act = 5;
+                }
+            });
+        });
+        ui.add_space(4.0);
+
+        match act {
+            1 => self.go_back(),
+            2 => self.go_fwd(),
+            3 => self.go_up(),
+            4 => self.navigate(pics, true),
+            5 => {
+                if let Some(p) = rfd::FileDialog::new().set_directory(&self.dir).pick_folder() {
+                    self.navigate(p, true);
+                }
+            }
+            6 => self.open_dialog(),
+            _ => {}
+        }
+        if let Some(p) = nav {
+            self.navigate(p, true);
+        }
+    }
+
+    /// Klasör içeriği: her satırda altı ön izleme. Klasöre tıklayınca içine girer, resme tıklayınca açar.
+    fn browser_grid(&mut self, ui: &mut egui::Ui) {
+        const COLS: usize = 6;
+        const GAP: f32 = 14.0;
+        const LABEL_H: f32 = 22.0;
+
+        if self.entries.is_empty() {
+            let msg = if let Some(e) = &self.dir_err {
+                format!("Klasör açılamadı: {e}")
+            } else if self.listing {
+                String::from("Yükleniyor…")
+            } else {
+                String::from("Bu klasörde resim ya da alt klasör yok")
+            };
+            let rect = ui.available_rect_before_wrap();
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, msg, FontId::proportional(18.0), Color32::GRAY);
+            ui.allocate_rect(rect, Sense::hover());
+            return;
+        }
+
+        let avail = ui.available_width() - 16.0; // kaydırma çubuğuna pay
+        let c = ((avail - GAP * (COLS as f32 - 1.0)) / COLS as f32).floor().max(48.0);
+        let used = c * COLS as f32 + GAP * (COLS as f32 - 1.0);
+        let row_h = c + LABEL_H + GAP;
+        let rows = (self.entries.len() + COLS - 1) / COLS;
+        ui.spacing_mut().item_spacing.y = 0.0;
+
+        let mut open_img: Option<usize> = None;
+        let mut open_dir: Option<PathBuf> = None;
+
+        egui::ScrollArea::vertical()
+            .id_source(("izgara", &self.dir))
+            .auto_shrink([false, false])
+            .show_rows(ui, row_h, rows, |ui, range| {
+                for r in range {
+                    let (row_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::hover());
+                    let x0 = row_rect.min.x + ((row_rect.width() - used) / 2.0).max(0.0);
+                    for k in 0..COLS {
+                        let n = r * COLS + k;
+                        let Some(e) = self.entries.get(n) else { break };
+                        let rect = Rect::from_min_size(
+                            pos2(x0 + k as f32 * (c + GAP), row_rect.min.y),
+                            vec2(c, c + LABEL_H),
+                        );
+                        if !ui.is_rect_visible(rect) {
+                            continue;
+                        }
+                        let resp = ui
+                            .interact(rect, ui.id().with(("hucre", n)), Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let hov = resp.hovered();
+                        let tile = Rect::from_min_size(rect.min, vec2(c, c));
+                        let painter = ui.painter();
+                        painter.rect_filled(tile, 8.0, Color32::from_gray(if hov { 48 } else { 34 }));
+                        if e.is_dir {
+                            draw_folder(painter, tile);
+                        } else if let Some(t) = self.thumbs.get(&e.path) {
+                            let sz = t.size_vec2();
+                            let area = tile.shrink(6.0);
+                            let kk = (area.width() / sz.x).min(area.height() / sz.y);
+                            painter.image(
+                                t.id(),
+                                Rect::from_center_size(tile.center(), sz * kk),
+                                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        } else if self.thumb_req.insert(e.path.clone()) {
+                            let _ = self.workers.thumb_tx.send(e.path.clone());
+                        }
+                        if hov {
+                            painter.rect_stroke(tile, 8.0, Stroke::new(2.0, BLUE));
+                        }
+                        let mut job =
+                            egui::text::LayoutJob::simple(e.name.clone(), FontId::proportional(12.5), Color32::from_gray(205), c);
+                        job.wrap.max_rows = 1;
+                        job.wrap.break_anywhere = true;
+                        let g = painter.layout_job(job);
+                        painter.galley(pos2(rect.center().x - g.size().x / 2.0, tile.max.y + 4.0), g, Color32::WHITE);
+
+                        if resp.clicked() {
+                            if e.is_dir {
+                                open_dir = Some(e.path.clone());
+                            } else {
+                                open_img = Some(n);
+                            }
+                        }
+                        resp.on_hover_text(e.name.clone());
+                    }
+                }
+            });
+
+        if let Some(d) = open_dir {
+            self.navigate(d, true);
+        } else if let Some(n) = open_img {
+            self.open_from_browser(n);
+        }
     }
 
     // ---------- Resim alanı ----------
@@ -844,11 +1239,25 @@ impl eframe::App for DeckApp {
         self.handle_keys(ctx);
         self.tick_slideshow(ctx);
 
-        egui::TopBottomPanel::top("araclar").show(ctx, |ui| self.toolbar(ctx, ui));
-        egui::TopBottomPanel::bottom("serit").exact_height(114.0).show(ctx, |ui| self.bottom_ui(ui));
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(BG))
-            .show(ctx, |ui| self.canvas(ctx, ui));
+        match self.screen {
+            Screen::Browse => {
+                egui::TopBottomPanel::top("gezgin").show(ctx, |ui| self.browser_bar(ui));
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none().fill(BG).inner_margin(egui::Margin::symmetric(14.0, 10.0)))
+                    .show(ctx, |ui| self.browser_grid(ui));
+            }
+            Screen::Viewer => {
+                egui::TopBottomPanel::top("araclar").show(ctx, |ui| self.toolbar(ctx, ui));
+                egui::TopBottomPanel::bottom("serit")
+                    .exact_height(110.0)
+                    .frame(egui::Frame::none().fill(Color32::from_rgb(28, 31, 33)))
+                    .show(ctx, |ui| self.bottom_ui(ui));
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::none().fill(BG))
+                    .show(ctx, |ui| self.canvas(ctx, ui));
+                self.slider_overlay(ctx);
+            }
+        }
     }
 }
 
@@ -857,6 +1266,16 @@ impl eframe::App for DeckApp {
 fn fit_rect(r: Rect, w: f32, h: f32) -> Rect {
     let k = (r.width() / w).min(r.height() / h);
     Rect::from_center_size(r.center(), vec2(w * k, h * k))
+}
+
+/// macOS tarzı mavi klasör simgesi
+fn draw_folder(painter: &egui::Painter, tile: Rect) {
+    let w = tile.width() * 0.56;
+    let h = w * 0.74;
+    let body = Rect::from_center_size(tile.center() + vec2(0.0, h * 0.08), vec2(w, h));
+    let tab = Rect::from_min_size(body.min - vec2(0.0, h * 0.15), vec2(w * 0.42, h * 0.3));
+    painter.rect_filled(tab, 3.0, Color32::from_rgb(60, 130, 205));
+    painter.rect_filled(body, 5.0, Color32::from_rgb(91, 172, 242));
 }
 
 fn tb(ui: &mut egui::Ui, label: &str, tip: &str, on: bool, color: Option<Color32>) -> bool {

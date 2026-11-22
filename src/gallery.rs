@@ -25,6 +25,15 @@ pub enum Msg {
     Full(PathBuf, Result<Arc<RgbaImage>, String>),
     Thumb(PathBuf, egui::ColorImage),
     Siblings(Vec<PathBuf>),
+    Dir(PathBuf, Result<Vec<Entry>, String>),
+}
+
+/// Klasör gezgininde bir satır: alt klasör ya da resim
+#[derive(Clone)]
+pub struct Entry {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_dir: bool,
 }
 
 pub fn is_image(p: &Path) -> bool {
@@ -52,7 +61,7 @@ pub fn decode(path: &Path) -> Result<RgbaImage, String> {
 }
 
 fn make_thumb(path: &Path) -> Option<egui::ColorImage> {
-    let img = decode_dyn(path).ok()?.thumbnail(200, 200).to_rgba8();
+    let img = decode_dyn(path).ok()?.thumbnail(256, 256).to_rgba8();
     let size = [img.width() as usize, img.height() as usize];
     Some(egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw()))
 }
@@ -102,7 +111,7 @@ impl Workers {
         {
             let tx = tx.clone();
             let ctx = ctx.clone();
-            spawn_pool(3, thumb_rx, move |p| {
+            spawn_pool(4, thumb_rx, move |p| {
                 if let Some(ci) = make_thumb(&p) {
                     let _ = tx.send(Msg::Thumb(p, ci));
                     ctx.request_repaint();
@@ -110,6 +119,17 @@ impl Workers {
             });
         }
         Workers { full_tx, thumb_tx, tx, ctx: ctx.clone() }
+    }
+
+    /// Klasörün alt klasörlerini ve resimlerini arka planda listeler (gezgin için).
+    pub fn list_dir(&self, dir: PathBuf) {
+        let tx = self.tx.clone();
+        let ctx = self.ctx.clone();
+        thread::spawn(move || {
+            let r = list_dir(&dir);
+            let _ = tx.send(Msg::Dir(dir, r));
+            ctx.request_repaint();
+        });
     }
 
     /// Klasördeki diğer resimleri arka planda listeler.
@@ -239,6 +259,32 @@ pub fn siblings(start: &Path) -> Vec<PathBuf> {
     } else {
         list
     }
+}
+
+/// Klasörün içeriği: önce alt klasörler, sonra resimler (ikisi de ada göre, sayıya duyarlı sıralı).
+pub fn list_dir(dir: &Path) -> Result<Vec<Entry>, String> {
+    let rd = std::fs::read_dir(dir).map_err(|e| e.to_string())?;
+    let mut dirs: Vec<Entry> = Vec::new();
+    let mut imgs: Vec<Entry> = Vec::new();
+    for e in rd.filter_map(|e| e.ok()) {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = e.path();
+        if path.is_dir() {
+            if name.to_lowercase().ends_with(".photoslibrary") {
+                continue; // Fotoğraflar kitaplığı bir paket; içine girilmez
+            }
+            dirs.push(Entry { path, name, is_dir: true });
+        } else if is_image(&path) && path.is_file() {
+            imgs.push(Entry { path, name, is_dir: false });
+        }
+    }
+    dirs.sort_by(|a, b| natural_cmp(&a.name, &b.name));
+    imgs.sort_by(|a, b| natural_cmp(&a.name, &b.name));
+    dirs.extend(imgs);
+    Ok(dirs)
 }
 
 // ---------- Kaydetme / çöp ----------

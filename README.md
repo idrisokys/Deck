@@ -61,6 +61,8 @@ ya da uygulamaya **sağ tıklayıp → Aç** deyin.
 
 ## Kullanım
 
+- **Klasör gezgini (açılış ekranı):** uygulama **Pictures** klasöründe açılır. Üstteki çubukta **Geri / İleri / Yukarı / Pictures**, tıklanabilir yol ve **Klasör seç…** vardır; içerik her satırda **altı ön izleme** olacak şekilde dizilir. Klasöre tıklayınca içine girilir, **bir resme tıklayınca** görüntüleyici açılır. Görüntüleyiciden gezgine dönmek için araç çubuğundaki **Klasörler**, **Esc** ya da **⌘B**; gezginde **Backspace** üst klasöre çıkar. Bir klasörü pencereye sürükleyip bırakmak da gezgini oraya götürür.
+- **Alt şerit:** küçük resim şeridi pencerenin tam genişliğini kaplar; büyütme ve serbest döndürme kaydırıcıları şeridin üstünde, sağ altta yüzer.
 - **Resim açma:** **⌘O** ya da araç çubuğundaki **Aç…**, resmi pencereye **sürükleyip bırakma**, ya da komut satırından `Deck resim.jpg`.
 - Açılan resimle aynı klasördeki tüm resimler alttaki şeritte (ada göre, sayıya duyarlı sıralı) listelenir; küçük resme tıklayarak geçiş yapılır.
 - **Klavye:** **← →** önceki/sonraki, **↑** sola döndür, **↓** sağa döndür, **⌘Z** geri al, **⌘S** kopya olarak kaydet, **⌘O** aç, **Esc** kırpmayı/kalemi kapatır (tam ekrandan çıkar).
