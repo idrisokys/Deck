@@ -13,17 +13,25 @@ permissions:
 jobs:
   build:
     name: Deck.app derle
-    runs-on: macos-15          # Apple Silicon (arm64) çalıştırıcı, macOS 15 Sequoia
+    runs-on: macos-15          # Apple Silicon (arm64) çalıştırıcı
 
     steps:
       - name: Kodu çek
         uses: actions/checkout@v4
 
+      - name: Rust kur
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Derleme önbelleği
+        uses: Swatinem/rust-cache@v2
+
       - name: Araç sürümleri
         run: |
           sw_vers
-          xcodebuild -version
-          swift --version
+          rustc --version
+          cargo --version
 
       - name: Derle
         run: |

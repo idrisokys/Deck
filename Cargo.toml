@@ -1,0 +1,20 @@
+[package]
+name = "deck"
+version = "2.0.0"
+edition = "2021"
+description = "Koyu temalı, Türkçe resim görüntüleyici"
+
+[[bin]]
+name = "Deck"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.29"      # egui tabanlı pencere + arayüz
+image = "0.25.5"     # resim çözme/kodlama
+rfd = "0.15"         # "Resim aç" diyaloğu
+trash = "5"          # Çöp Kutusu'na atma
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

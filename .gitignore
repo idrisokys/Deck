@@ -4,3 +4,4 @@ Deck.app/
 *.dmg
 dmg-kok/
 build/
+target/

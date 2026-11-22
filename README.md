@@ -1,6 +1,7 @@
 # Deck
 
-macOS 15 Sequoia ve üzeri (Apple Silicon) için koyu temalı, tamamen Türkçe resim görüntüleyici. SwiftUI ile yazıldı.
+macOS (Apple Silicon) için koyu temalı, tamamen Türkçe resim görüntüleyici. **Rust** ile yazıldı
+([egui/eframe](https://github.com/emilk/egui) arayüzü + [image](https://github.com/image-rs/image) kütüphanesi).
 
 <p align="center"><img src="Deck-icon-1024.png" width="160" alt="Deck simgesi"></p>
 
@@ -9,25 +10,19 @@ macOS 15 Sequoia ve üzeri (Apple Silicon) için koyu temalı, tamamen Türkçe 
 ```
 .
 ├── .github/workflows/Deck-build.yml   # GitHub Actions derleme iş akışı
-├── Deck.swift                         # Uygulamanın tüm kodu (resim görüntüleyici)
+├── Cargo.toml                         # Rust proje tanımı ve bağımlılıklar
+├── src/
+│   ├── main.rs                        # Giriş noktası, pencere ayarları
+│   ├── app.rs                         # Arayüz: araç çubuğu, resim alanı, kırpma, kalem, şerit, kaydırıcılar
+│   └── gallery.rs                     # Klasör tarama, resim çözme, önbellek, arka plan işçileri, kaydetme
 ├── Deck.icns                          # Uygulama simgesi
 ├── Deck-icon-source.png               # Simgenin kaynak tasarımı (balıkçı teknesi)
 ├── Deck-icon-1024.png                 # macOS ızgarasına oturtulmuş 1024 px simge
-├── Deck-Info.plist                    # Uygulama bilgileri, Türkçe yerelleştirme, izin metinleri
-├── Deck-build.sh                      # Yerelde ve CI'da kullanılan derleme betiği
+├── Deck-Info.plist                    # Uygulama bilgileri, izin metinleri
+├── Deck-build.sh                      # Yerelde ve CI'da kullanılan derleme betiği (.app üretir)
 ├── Deck-tools/Deck-make-icon.py       # Kaynak görselden .icns üreten betik (isteğe bağlı)
-├── .gitignore                         # (GitHub bu adı şart koşar)
-└── README.md                          # (GitHub bu adı şart koşar)
-```
-
-## Simgeyi yeniden üretme (isteğe bağlı)
-
-Simgeyi değiştirmek isterseniz `Deck-icon-source.png` dosyasını yenisiyle değiştirip şunu çalıştırın
-(Python 3 ve Pillow gerekir: `pip3 install pillow`):
-
-```bash
-cd Deck-tools
-python3 Deck-make-icon.py ../Deck-icon-source.png ../Deck-icon-1024.png ../Deck.icns
+├── .gitignore
+└── README.md
 ```
 
 ## GitHub'da derleme
@@ -35,28 +30,24 @@ python3 Deck-make-icon.py ../Deck-icon-source.png ../Deck-icon-1024.png ../Deck.
 1. GitHub'da yeni bir depo açın.
 2. Bu klasördeki **tüm dosyaları** (gizli `.github` klasörü dahil) depoya yükleyin.
    Web arayüzü dot-klasörlerini atlarsa *Add file → Create new file* deyip dosya adına
-   `.github/workflows/Deck-build.yml` yazın ve içeriği yapıştırın. Git ile:
-   ```bash
-   git init
-   git add .
-   git commit -m "İlk sürüm"
-   git branch -M main
-   git remote add origin https://github.com/KULLANICI/DEPO.git
-   git push -u origin main
-   ```
-3. **Actions** sekmesinde derleme kendiliğinden başlar (yaklaşık 2–4 dk).
+   `.github/workflows/Deck-build.yml` yazın ve içeriği yapıştırın.
+3. **Actions** sekmesinde derleme kendiliğinden başlar (ilk seferde Rust bağımlılıkları indirileceği için 5–10 dk sürebilir).
 4. Bitince çalıştırmanın sayfasında **Artifacts** bölümünden `Deck-macOS-arm64` dosyasını indirin (içinde `.zip` ve `.dmg` var).
 
 Elle başlatmak için: **Actions → Derle (macOS Apple Silicon) → Run workflow**.
+Kalıcı indirme bağlantısı için `git tag v2.0 && git push origin v2.0` (zip ve dmg **Releases** sayfasına eklenir).
 
-## Release (kalıcı indirme bağlantısı)
+> İlk derlemeden sonra oluşan `Cargo.lock` dosyasını depoya eklemeniz önerilir; bağımlılık sürümleri sabitlenir.
+
+## Yerelde derleme
 
 ```bash
-git tag v1.0
-git push origin v1.0
+curl https://sh.rustup.rs -sSf | sh     # Rust yoksa
+chmod +x Deck-build.sh
+./Deck-build.sh
 ```
 
-Zip ve dmg **Releases** sayfasına otomatik eklenir.
+Yalnızca çalıştırmak için: `cargo run --release -- /yol/resim.jpg`
 
 ## İndirilen uygulamayı açma
 
@@ -68,19 +59,23 @@ xattr -cr /Applications/Deck.app
 
 ya da uygulamaya **sağ tıklayıp → Aç** deyin.
 
-## Yerelde derleme
+## Kullanım
 
-```bash
-chmod +x Deck-build.sh
-./Deck-build.sh
-```
+- **Resim açma:** **⌘O** ya da araç çubuğundaki **Aç…**, resmi pencereye **sürükleyip bırakma**, ya da komut satırından `Deck resim.jpg`.
+- Açılan resimle aynı klasördeki tüm resimler alttaki şeritte (ada göre, sayıya duyarlı sıralı) listelenir; küçük resme tıklayarak geçiş yapılır.
+- **Klavye:** **← →** önceki/sonraki, **↑** sola döndür, **↓** sağa döndür, **⌘Z** geri al, **⌘S** kopya olarak kaydet, **⌘O** aç, **Esc** kırpmayı/kalemi kapatır (tam ekrandan çıkar).
+- **Araç çubuğu:** gezinme, döndürme (90°), çevirme, kırpma, kırmızı kalem, geri al, tam ekran, slayt gösterisi (3 sn), kaydet, Çöp Kutusu'na at, Finder'da göster, aç.
+- **Kaydırıcılar (alt sağ):** üstteki **büyütme/küçültme** (sağa çek → büyür, sola çek → küçülür; %25–%400), alttaki **serbest döndürme** (sola çek → sola, sağa çek → sağa; −180°…+180°). Sayıya tıklamak sıfırlar. Büyütülmüş resim sürükleyerek kaydırılır; dokunmatik yüzeyde sıkıştırma da çalışır. Bu ikisi yalnızca görünümü değiştirir, kaydedilen kopyaya yansımaz.
+- **Kırmızı kalem:** resmin üzerine sürükleyerek çizilir; çizgiler doğrudan resme işlenir. **Geri al** son 10 işlemi (çizgi, döndürme, çevirme) geri alır.
+- **Kaydet:** sormadan, kırpma alanı, çizgiler ve döndürme/çevirmeyle birlikte resmi **“ad kopya.uzantı”** adıyla aynı klasöre kaydeder; özgün dosyaya dokunmaz. Kaydedilen biçim JPEG/PNG/TIFF/BMP/GIF'tir, diğer biçimler PNG olarak yazılır.
+- **Hız:** resim klasör taranmadan hemen açılır; komşu resimler arka planda önceden çözülür; küçük resimler yalnızca görünür olunca üretilir; slayt gösterisi kapalıyken zamanlayıcı çalışmaz.
 
-## Kullanım notları
+## Swift sürümüne göre farklar
 
-- Resim açmanın yolları: Finder'da resme sağ tıklayıp **Birlikte Aç → Deck**, uygulamayı varsayılan resim görüntüleyici yapmak, **⌘O** ya da araç çubuğundaki klasör düğmesi.
-- Açılan resimle aynı klasördeki tüm resimler alttaki şeritte listelenir (ada göre sıralı); şeritten bir küçük resme tıklayarak geçiş yapılır.
-- Klavye: **← →** önceki/sonraki resim, **↑** sola döndür, **↓** sağa döndür, **Enter** kırpmayı kopya olarak kaydet, **Esc** kırpmayı iptal.
-- Araç çubuğu: gezinme, döndürme, çevirme, kırpma, tam ekran, slayt gösterisi (3 sn), Çöp Kutusu'na at, paylaş, başka resim aç.
-- Kırpma, resmi **“ad kopya.uzantı”** adıyla aynı klasöre kaydeder; özgün dosyaya dokunmaz.
-- **Desteklenen biçimler:** macOS'un (ImageIO) çözebildiği tüm resim biçimleri: JPEG, PNG, HEIC/HEIF, AVIF, WebP, TIFF, GIF, BMP, JPEG 2000, PSD, ICO/ICNS, RAW (DNG, CR2/CR3, NEF, ARW, ORF, RAF, RW2 …) ve SVG. İşletim sistemi yeni bir biçim eklerse Deck onu da açar. Animasyonlu GIF'te ilk kare gösterilir.
-- **Hız:** İlk resim klasör taranmadan hemen açılır; komşu resimler arka planda önceden çözülür (oklarla gezinme anında olur); küçük resimler dosyadaki gömülü önizlemeden üretilir; slayt gösterisi kapalıyken zamanlayıcı çalışmaz.
+| | Swift sürümü | Rust sürümü |
+|---|---|---|
+| Finder'da **Birlikte Aç / varsayılan uygulama** | Var | **Yok** (egui bu Apple olayını almıyor); bunun yerine ⌘O, sürükle-bırak, komut satırı |
+| Desteklenen biçimler | macOS'un çözdüğü her şey (HEIC, AVIF, RAW, PSD, SVG…) | JPEG, PNG, GIF, WebP, TIFF, BMP, ICO, TGA, QOI, PNM, HDR, EXR, DDS |
+| Paylaş düğmesi | Var | Yok (yerine **Finder'da göster**) |
+| Geri al | Yok | Var |
+| Asgari macOS | 15 | 11 |
