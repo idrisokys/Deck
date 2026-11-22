@@ -4,6 +4,7 @@ mod app;
 mod gallery;
 mod lang;
 mod macos_open;
+mod thumbs;
 
 use std::path::PathBuf;
 
