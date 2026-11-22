@@ -309,13 +309,20 @@ impl DeckApp {
                     if id == self.scan_id {
                         self.scan_list = list;
                         self.scanning = false;
+                        if self.scan_list.is_empty() {
+                            self.workers.list_dir(self.dir.clone());
+                        }
                     }
                 }
                 Msg::Dir(d, r) => {
                     if d == self.dir {
                         self.listing = false;
                         match r {
-                            Ok(v) => {
+                            Ok(mut v) => {
+                                // Tarama sonuçlarında gezerken yalnızca resimler gösterilir
+                                if self.scanning || !self.scan_list.is_empty() {
+                                    v.retain(|e| !e.is_dir);
+                                }
                                 self.entries = v;
                                 self.dir_err = None;
                             }
@@ -555,6 +562,7 @@ impl DeckApp {
         self.scan_list.clear();
         self.scanning = true;
         self.view_scan = true;
+        self.workers.list_dir(self.dir.clone());
         self.workers.scan(self.scan_id, root, skip, self.scan_cancel.clone(), self.scan_found.clone());
     }
 
@@ -570,6 +578,7 @@ impl DeckApp {
         self.cancel_scan();
         self.scan_list.clear();
         self.view_scan = false;
+        self.workers.list_dir(self.dir.clone());
     }
 
     /// Görüntüleyiciden gezgine dön (açık resmin klasörüne gider, listeyi yeniler).
@@ -941,7 +950,7 @@ impl DeckApp {
                     if tb(ui, "Durdur", "Taramayı durdur", true, None) {
                         act = 8;
                     }
-                } else if tb(ui, "Tara", "Ana dizindeki tüm klasörleri ve alt dizinleri tara (Applications hariç)", false, None) {
+                } else if tb(ui, "Tara", "Ana dizindeki tüm klasörleri ve alt dizinleri tara ", false, None) {
                     act = 7;
                 }
                 if tb(ui, "Pictures", "Pictures klasörüne git", at_pics, None) {
@@ -1064,7 +1073,7 @@ impl DeckApp {
         }
     }
 
-    /// Ana ekranda tarama sonuçları: "Uygulamalar" ayrı bir bölümde, taranan klasörler altında; her satırda altı kart.
+    /// Ana ekranda tarama sonuçları: resim içeren klasörler; her satırda altı kart.
     fn scan_view(&mut self, ui: &mut egui::Ui) {
         const COLS: usize = 6;
         const GAP: f32 = 14.0;
@@ -1076,49 +1085,10 @@ impl DeckApp {
         let row_h = c + LABEL_H + GAP;
         ui.spacing_mut().item_spacing.y = 0.0;
 
-        // Uygulamalar bölümü (taramaya dahil değil)
-        let mut apps: Vec<(String, PathBuf)> = Vec::new();
-        let user_apps = self.scan_root.join("Applications");
-        if user_apps.is_dir() {
-            apps.push(("Applications".to_string(), user_apps));
-        }
-        let sys_apps = PathBuf::from("/Applications");
-        if sys_apps.is_dir() {
-            apps.push(("Applications (Sistem)".to_string(), sys_apps));
-        }
-
         let mut go: Option<PathBuf> = None;
         let scanning = self.scanning;
 
         egui::ScrollArea::vertical().id_source("tarama_gorunumu").auto_shrink([false, false]).show(ui, |ui| {
-            if !apps.is_empty() {
-                ui.label(RichText::new("Uygulamalar").strong().size(16.0));
-                ui.add_space(8.0);
-                for (ri, chunk) in apps.chunks(COLS).enumerate() {
-                    let (row_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::hover());
-                    let x0 = row_rect.min.x + ((row_rect.width() - used) / 2.0).max(0.0);
-                    for (k, (name, path)) in chunk.iter().enumerate() {
-                        let rect = Rect::from_min_size(pos2(x0 + k as f32 * (c + GAP), row_rect.min.y), vec2(c, c + LABEL_H));
-                        let resp = ui
-                            .interact(rect, ui.id().with(("uyg", ri, k)), Sense::click())
-                            .on_hover_cursor(egui::CursorIcon::PointingHand);
-                        let tile = Rect::from_min_size(rect.min, vec2(c, c));
-                        let painter = ui.painter();
-                        painter.rect_filled(tile, 8.0, Color32::from_gray(if resp.hovered() { 48 } else { 34 }));
-                        draw_folder(painter, tile);
-                        if resp.hovered() {
-                            painter.rect_stroke(tile, 8.0, Stroke::new(2.0, BLUE));
-                        }
-                        label_under(painter, tile, name.clone(), c);
-                        if resp.clicked() {
-                            go = Some(path.clone());
-                        }
-                        resp.on_hover_text(path.display().to_string());
-                    }
-                }
-                ui.add_space(10.0);
-            }
-
             ui.label(RichText::new(format!("Taranan klasörler ({})", self.scan_list.len())).strong().size(16.0));
             ui.add_space(8.0);
             if self.scan_list.is_empty() {

@@ -335,6 +335,9 @@ pub fn list_dir(dir: &Path) -> Result<Vec<Entry>, String> {
             if name.to_lowercase().ends_with(".photoslibrary") {
                 continue; // Fotoğraflar kitaplığı bir paket; içine girilmez
             }
+            if name == "Applications" {
+                continue; // Uygulamalar klasörü gezginde gösterilmez
+            }
             dirs.push(Entry { path, name, is_dir: true });
         } else if is_image(&path) && path.is_file() {
             imgs.push(Entry { path, name, is_dir: false });
