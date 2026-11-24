@@ -15,6 +15,7 @@ use image::{imageops, RgbaImage};
 
 use crate::gallery::{self, Cache, Entry, Msg, ScanItem, Workers};
 use crate::lang::Lang;
+use crate::video::{self, VideoPlayer};
 
 const BG: Color32 = Color32::from_rgb(23, 26, 28);
 const BLUE: Color32 = Color32::from_rgb(10, 132, 255);
@@ -26,6 +27,9 @@ const ZOOM_BASE: f32 = 100.0; // büyütme çubuğu: %1 … %10000
 const TOP_BAR_H: f32 = 58.0; // üst çubuk yüksekliği
 const BAR_INNER: f32 = 46.0; // çerçeve boşluğu düşülmüş iç yükseklik
 const BTN_H: f32 = 40.0; // düğme yüksekliği
+const FF_RATE: f32 = 2.5; // oynat düğmesine basılı tutunca hızlı ileri sarma
+const FF_HOLD_MS: u128 = 350; // basılı tutma sayılması için süre
+const CTRL_H: f32 = 56.0; // video denetim çubuğu yüksekliği
 const THUMB_CAP: usize = 600; // bellekte tutulan en çok küçük resim
 
 #[derive(Clone, Copy, PartialEq)]
@@ -134,6 +138,15 @@ pub struct DeckApp {
     rot_v: f32,  // -180..180 derece
     pan: Vec2,
 
+    // video
+    video: Option<VideoPlayer>,
+    video_tex: Option<TextureHandle>,
+    scrub: Option<f64>,         // ilerleme çubuğu sürüklenirken gösterilen saniye
+    ff_hold: Option<Instant>,   // oynat düğmesine basılma anı
+    ff: bool,                   // 2.5× ileri sarma sürüyor
+    ff_resume: bool,            // ileri sarmadan önce oynuyor muydu
+    ff_consumed: bool,          // bırakma tıklaması durdur/oynat sayılmasın
+
     play: bool,
     fullscreen: bool,
     last_slide: Instant,
@@ -180,6 +193,13 @@ impl DeckApp {
             tex: None,
             tex_dirty: false,
             failed: false,
+            video: None,
+            video_tex: None,
+            scrub: None,
+            ff_hold: None,
+            ff: false,
+            ff_resume: false,
+            ff_consumed: false,
             cache: Cache::new(),
             pending: HashSet::new(),
             thumbs: HashMap::new(),
@@ -227,7 +247,13 @@ impl DeckApp {
     }
 
     fn open_dialog(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter(self.lang.t("Resimler", "Images"), gallery::EXTS).pick_file() {
+        let all: Vec<&str> = gallery::EXTS.iter().chain(gallery::VIDEO_EXTS.iter()).copied().collect();
+        if let Some(p) = rfd::FileDialog::new()
+            .add_filter(self.lang.t("Resimler ve videolar", "Images and videos"), &all)
+            .add_filter(self.lang.t("Resimler", "Images"), gallery::EXTS)
+            .add_filter(self.lang.t("Videolar", "Videos"), gallery::VIDEO_EXTS)
+            .pick_file()
+        {
             self.open(p);
         }
     }
@@ -240,6 +266,9 @@ impl DeckApp {
     }
 
     fn request_full(&mut self, p: PathBuf) {
+        if gallery::is_video(&p) {
+            return; // videolar çözülmez, oynatıcıyla açılır
+        }
         if self.cache.get(&p).is_some() || self.pending.contains(&p) {
             return;
         }
@@ -249,6 +278,7 @@ impl DeckApp {
 
     /// Geçerli resmi yükler; yüklenirken eski resim görünür kalır.
     fn load_current(&mut self) {
+        self.stop_video();
         let Some(p) = self.files.get(self.idx).cloned() else {
             self.cur = None;
             self.cur_path = None;
@@ -256,12 +286,63 @@ impl DeckApp {
             self.failed = false;
             return;
         };
+        if gallery::is_video(&p) {
+            self.load_video(p);
+            return;
+        }
         if let Some(img) = self.cache.get(&p) {
             self.set_cur(p, img);
             self.prefetch();
         } else {
             self.failed = false;
             self.request_full(p);
+        }
+    }
+
+    fn is_video_cur(&self) -> bool {
+        self.files.get(self.idx).map_or(false, |p| gallery::is_video(p))
+    }
+
+    fn stop_video(&mut self) {
+        if let Some(v) = &self.video {
+            v.pause();
+        }
+        self.video = None;
+        self.video_tex = None;
+        self.scrub = None;
+        self.ff = false;
+        self.ff_hold = None;
+        self.ff_consumed = false;
+    }
+
+    /// Videoyu açar ve hemen oynatmaya başlar.
+    fn load_video(&mut self, p: PathBuf) {
+        self.cur = None;
+        self.cur_path = None;
+        self.tex = None;
+        self.tex_dirty = false;
+        self.failed = false;
+        match VideoPlayer::open(&p) {
+            Some(v) => {
+                v.set_rate(1.0);
+                self.video = Some(v);
+            }
+            None => self.failed = true,
+        }
+        self.prefetch();
+    }
+
+    /// Oynat / duraklat (video bittiyse başa sarar).
+    fn toggle_video(&mut self) {
+        if let Some(v) = &mut self.video {
+            if v.is_playing() {
+                v.pause();
+            } else {
+                if v.ended() {
+                    v.seek(0.0);
+                }
+                v.set_rate(1.0);
+            }
         }
     }
 
@@ -466,6 +547,7 @@ impl DeckApp {
         self.files.remove(self.idx);
         self.reset_edit();
         if self.files.is_empty() {
+            self.stop_video();
             self.idx = 0;
             self.cur = None;
             self.cur_path = None;
@@ -593,6 +675,7 @@ impl DeckApp {
     /// Görüntüleyiciden gezgine dön (açık resmin klasörüne gider, listeyi yeniler).
     fn show_browser(&mut self, ctx: &Context) {
         self.play = false;
+        self.stop_video();
         if self.fullscreen {
             self.fullscreen = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
@@ -669,6 +752,9 @@ impl DeckApp {
                 i.consume_key(Modifiers::COMMAND, Key::B),
             )
         });
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Space)) {
+            self.toggle_video();
+        }
         if left {
             self.go(-1);
         }
@@ -713,6 +799,15 @@ impl DeckApp {
 
     fn tick_slideshow(&mut self, ctx: &Context) {
         if self.screen != Screen::Viewer || !self.play || self.files.len() < 2 {
+            return;
+        }
+        // Videoda slayt gösterisi, video bitince bir sonrakine geçer
+        if self.video.is_some() {
+            if self.video.as_ref().map_or(false, |v| v.ended()) {
+                self.go(1);
+                self.last_slide = Instant::now();
+            }
+            ctx.request_repaint_after(Duration::from_millis(300));
             return;
         }
         let d = Duration::from_secs(SLIDE_SECS);
@@ -852,6 +947,9 @@ impl DeckApp {
                             ui.painter().rect_filled(rect, 4.0, Color32::from_gray(40));
                             self.workers.want_thumb(&p);
                         }
+                    }
+                    if gallery::is_video(&self.files[n]) {
+                        play_badge(ui.painter(), rect);
                     }
                     if n == self.idx {
                         ui.painter().rect_stroke(rect.expand(2.0), 6.0, Stroke::new(3.0, BLUE));
@@ -1265,6 +1363,9 @@ impl DeckApp {
                         } else {
                             self.workers.want_thumb(&e.path);
                         }
+                        if !e.is_dir && gallery::is_video(&e.path) {
+                            play_badge(painter, tile);
+                        }
                         if hov {
                             painter.rect_stroke(tile, 8.0, Stroke::new(2.0, BLUE));
                         }
@@ -1429,7 +1530,176 @@ impl DeckApp {
         pill(painter, pos2(rect.center().x, rect.min.y + 12.0), self.lang.t("Kaydet düğmesi: kopya olarak kaydet  •  Esc: iptal", "Save button: save as copy  •  Esc: cancel"));
     }
 
+    /// Video alanı: kare + altta denetim çubuğu (oynat/duraklat, süre, ilerleme çubuğu).
+    /// Oynat düğmesine basılı tutunca `FF_RATE`× ileri sarar, bırakınca eski haline döner.
+    fn canvas_video(&mut self, ctx: &Context, ui: &mut egui::Ui) {
+        let lg = self.lang;
+        let avail = ui.available_size();
+        let (resp, painter) = ui.allocate_painter(avail, Sense::hover());
+        let rect = resp.rect;
+        let video_rect = Rect::from_min_max(rect.min, pos2(rect.max.x, (rect.max.y - CTRL_H).max(rect.min.y)));
+        let ctrl_rect = Rect::from_min_max(pos2(rect.min.x, video_rect.max.y), rect.max);
+
+        // Yeni kareyi dokuya aktar
+        if let Some(v) = self.video.as_mut() {
+            if let Some(ci) = v.poll_frame() {
+                match &mut self.video_tex {
+                    Some(t) => t.set(ci, TextureOptions::LINEAR),
+                    None => self.video_tex = Some(ctx.load_texture("video", ci, TextureOptions::LINEAR)),
+                }
+            }
+            if v.failed() {
+                self.failed = true;
+            }
+        }
+
+        // Kareyi çiz
+        if let Some(t) = &self.video_tex {
+            let sz = t.size_vec2();
+            let disp = fit_rect(video_rect, sz.x, sz.y);
+            painter.image(t.id(), disp, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        } else {
+            let text = if self.failed || self.video.is_none() {
+                lg.t("Video açılamadı", "Could not open video")
+            } else {
+                lg.t("Yükleniyor…", "Loading…")
+            };
+            painter.text(video_rect.center(), Align2::CENTER_CENTER, text, FontId::proportional(20.0), Color32::GRAY);
+        }
+
+        // Denetim çubuğu
+        painter.rect_filled(ctrl_rect, 0.0, Color32::from_rgb(28, 31, 33));
+        painter.hline(ctrl_rect.x_range(), ctrl_rect.top(), Stroke::new(1.0, Color32::from_gray(52)));
+
+        let (cur, dur, playing) = match &self.video {
+            Some(v) => (v.current(), v.duration(), v.is_playing()),
+            None => (0.0, 0.0, false),
+        };
+        let shown = self.scrub.unwrap_or(cur).min(dur.max(0.0));
+        let ff = self.ff;
+        let mut seek_to: Option<f64> = None;
+        let mut drag_stopped = false;
+        let mut btn_down = false;
+        let mut btn_clicked = false;
+
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(ctrl_rect), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.add_space(16.0);
+
+                // Oynat / duraklat düğmesi (simgeler elle çizilir)
+                let (brect, bresp) = ui.allocate_exact_size(vec2(44.0, 34.0), Sense::click());
+                let bresp = bresp.on_hover_text(lg.t(
+                    "Oynat / duraklat (Boşluk) — basılı tut: 2.5× ileri sar",
+                    "Play / pause (Space) — hold: 2.5× fast-forward",
+                ));
+                let bg = if ff {
+                    BLUE
+                } else if bresp.hovered() {
+                    Color32::from_gray(64)
+                } else {
+                    Color32::from_gray(48)
+                };
+                ui.painter().rect_filled(brect, 8.0, bg);
+                let c = brect.center();
+                if playing {
+                    for dx in [-5.0f32, 5.0] {
+                        ui.painter().rect_filled(Rect::from_center_size(pos2(c.x + dx, c.y), vec2(5.0, 14.0)), 1.0, Color32::WHITE);
+                    }
+                } else {
+                    ui.painter().add(Shape::convex_polygon(
+                        vec![pos2(c.x - 5.0, c.y - 8.0), pos2(c.x - 5.0, c.y + 8.0), pos2(c.x + 8.0, c.y)],
+                        Color32::WHITE,
+                        Stroke::NONE,
+                    ));
+                }
+                btn_down = bresp.is_pointer_button_down_on();
+                btn_clicked = bresp.clicked();
+
+                ui.add_space(10.0);
+                ui.label(RichText::new(format!("{} / {}", video::fmt_time(shown), video::fmt_time(dur))).monospace());
+                if ff {
+                    ui.label(RichText::new(format!("{FF_RATE}×")).strong().color(BLUE));
+                }
+
+                ui.add_space(10.0);
+                ui.spacing_mut().slider_width = (ui.available_width() - 24.0).max(80.0);
+                let mut pos = shown;
+                let r = ui.add_enabled(
+                    dur > 0.0,
+                    egui::Slider::new(&mut pos, 0.0..=dur.max(0.01)).show_value(false),
+                );
+                if r.changed() {
+                    seek_to = Some(pos);
+                }
+                if r.drag_stopped() {
+                    drag_stopped = true;
+                }
+            });
+        });
+
+        // İlerleme çubuğu
+        if let Some(s) = seek_to {
+            self.scrub = Some(s);
+            if let Some(v) = &mut self.video {
+                v.seek(s);
+            }
+        }
+        if drag_stopped {
+            self.scrub = None;
+        }
+
+        // Basılı tutma: FF_RATE× ileri sar; kısa tıklama: oynat / duraklat
+        if btn_down {
+            let t0 = *self.ff_hold.get_or_insert_with(Instant::now);
+            if !self.ff && t0.elapsed().as_millis() >= FF_HOLD_MS {
+                self.ff = true;
+                self.ff_resume = playing;
+                if let Some(v) = &self.video {
+                    v.set_rate(FF_RATE);
+                }
+            }
+            ctx.request_repaint_after(Duration::from_millis(50));
+        } else {
+            if self.ff {
+                self.ff = false;
+                self.ff_consumed = true;
+                if let Some(v) = &self.video {
+                    if self.ff_resume {
+                        v.set_rate(1.0);
+                    } else {
+                        v.pause();
+                    }
+                }
+            }
+            self.ff_hold = None;
+        }
+        if btn_clicked {
+            if self.ff_consumed {
+                self.ff_consumed = false;
+            } else {
+                self.toggle_video();
+            }
+        }
+
+        if self.video.as_ref().map_or(false, |v| v.wants_repaint()) {
+            ctx.request_repaint();
+        }
+
+        // Bildirim
+        let expired = self.toast.as_ref().map_or(false, |(_, at)| at.elapsed() >= Duration::from_millis(TOAST_MS));
+        if expired {
+            self.toast = None;
+        }
+        if let Some((text, _)) = &self.toast {
+            pill(&painter, pos2(video_rect.center().x, video_rect.max.y - 40.0), text);
+        }
+    }
+
     fn canvas(&mut self, ctx: &Context, ui: &mut egui::Ui) {
+        if self.is_video_cur() {
+            self.canvas_video(ctx, ui);
+            return;
+        }
         if self.tex_dirty {
             self.rebuild_tex(ctx);
         }
@@ -1632,4 +1902,15 @@ fn pill(painter: &egui::Painter, top_center: Pos2, text: &str) {
     let r = Align2::CENTER_TOP.anchor_size(top_center, galley.size());
     painter.rect_filled(r.expand(6.0), 6.0, Color32::from_black_alpha(170));
     painter.galley(r.min, galley, Color32::WHITE);
+}
+
+/// Video küçük resminin köşesine oynat işareti
+fn play_badge(painter: &egui::Painter, tile: Rect) {
+    let c = tile.left_bottom() + vec2(14.0, -14.0);
+    painter.circle_filled(c, 11.0, Color32::from_black_alpha(170));
+    painter.add(Shape::convex_polygon(
+        vec![pos2(c.x - 3.0, c.y - 5.0), pos2(c.x - 3.0, c.y + 5.0), pos2(c.x + 5.0, c.y)],
+        Color32::WHITE,
+        Stroke::NONE,
+    ));
 }

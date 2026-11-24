@@ -277,7 +277,11 @@ pub fn make_thumb(path: &Path) -> Option<egui::ColorImage> {
         }
     }
 
-    let img = thumb_jpeg_scaled(path).or_else(|| decode_dyn(path).ok().map(|d| d.thumbnail(THUMB_PX, THUMB_PX).to_rgba8()))?;
+    let img = if crate::gallery::is_video(path) {
+        crate::video::thumbnail(path, THUMB_PX)?
+    } else {
+        thumb_jpeg_scaled(path).or_else(|| decode_dyn(path).ok().map(|d| d.thumbnail(THUMB_PX, THUMB_PX).to_rgba8()))?
+    };
 
     if let (Some(d), Some(k)) = (&dir, &key) {
         cache_store(d, k, &img);

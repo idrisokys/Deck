@@ -5,6 +5,7 @@ mod gallery;
 mod lang;
 mod macos_open;
 mod thumbs;
+mod video;
 
 use std::path::PathBuf;
 

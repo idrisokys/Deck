@@ -23,6 +23,9 @@ pub const EXTS: &[&str] = &[
     "hdr", "exr", "dds",
 ];
 
+/// Desteklenen video uzantıları (macOS AVFoundation oynatır)
+pub const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "mov", "qt", "avi", "mpg", "mpeg", "3gp"];
+
 /// Arka plan işçilerinden arayüze gelen iletiler
 pub enum Msg {
     Full(PathBuf, Result<Arc<RgbaImage>, String>),
@@ -85,6 +88,17 @@ pub fn nfc_tr(s: &str) -> String {
 
 pub fn is_image(p: &Path) -> bool {
     ImageFormat::from_path(p).map(|f| f.reading_enabled()).unwrap_or(false)
+}
+
+pub fn is_video(p: &Path) -> bool {
+    p.extension()
+        .and_then(|e| e.to_str())
+        .map_or(false, |e| VIDEO_EXTS.iter().any(|v| v.eq_ignore_ascii_case(e)))
+}
+
+/// Resim ya da video
+pub fn is_media(p: &Path) -> bool {
+    is_image(p) || is_video(p)
 }
 
 // ---------- Çözme ----------
@@ -325,7 +339,7 @@ pub fn siblings(start: &Path) -> Vec<PathBuf> {
             }
             let p = e.path();
             let is_me = Some(e.file_name()) == me;
-            if is_me || (is_image(&p) && p.is_file()) {
+            if is_me || (is_media(&p) && p.is_file()) {
                 v.push((name, p));
             }
         }
@@ -359,7 +373,7 @@ pub fn list_dir(dir: &Path) -> Result<Vec<Entry>, String> {
                 continue; // Uygulamalar klasörü gezginde gösterilmez
             }
             dirs.push(Entry { path, name, is_dir: true });
-        } else if is_image(&path) && path.is_file() {
+        } else if is_media(&path) && path.is_file() {
             imgs.push(Entry { path, name, is_dir: false });
         }
     }
@@ -409,7 +423,7 @@ pub fn scan_tree(
                     continue;
                 }
                 stack.push(path);
-            } else if (ft.is_file() || ft.is_symlink()) && is_image(&path) && path.is_file() {
+            } else if (ft.is_file() || ft.is_symlink()) && is_media(&path) && path.is_file() {
                 n += 1;
                 if first.is_none() {
                     first = Some(path);
